@@ -107,3 +107,23 @@ test('no-ai run marks stage 06 as not executed', () => {
   const contract = fs.readFileSync(path.join(root, '.context/stages/06_synthesis/CONTEXT.md'), 'utf8');
   assert.match(contract, /not executed/i);
 });
+
+test('default flags without AI CLI on PATH: second run still skips via ledger', () => {
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const root = copyFixture('expo-app');
+  const SCRIPT = path.join(__dirname, '..', 'generate_project_context.js');
+  const env = { ...process.env, PATH: '/usr/bin:/bin' };
+  delete env.CLAUDECODE;
+  let r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const manifestPath = path.join(root, '.context/_config/manifest.json');
+  const m1 = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  assert.strictEqual(m1.parsed_markdown['README.md'].ai_summarized, false);
+  r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const m2 = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  assert.strictEqual(m2.parsed_markdown['README.md'].parsed_at, m1.parsed_markdown['README.md'].parsed_at,
+    'second default-flag run without AI CLI must skip unchanged files');
+  assert.match(r.stderr, /0 parsed/);
+});
