@@ -127,3 +127,22 @@ test('default flags without AI CLI on PATH: second run still skips via ledger', 
     'second default-flag run without AI CLI must skip unchanged files');
   assert.match(r.stderr, /0 parsed/);
 });
+
+test('laravel fixture full run', () => {
+  const root = copyFixture('laravel-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8'), /create_users_table/);
+  assert.match(fs.readFileSync(path.join(root, '.context/stages/03_data/output/entities.md'), 'utf8'), /\$fillable/);
+  assert.ok(!fs.existsSync(path.join(root, '.context/stages/03_data/output/state.md')), 'state.md omitted for PHP stack');
+});
+
+test('--debug-detection prints JSON and writes nothing', () => {
+  const root = copyFixture('expo-app');
+  const r = runGenerator(root, ['--no-ai', '--debug-detection']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const parsed = JSON.parse(r.stdout);
+  assert.strictEqual(parsed.detection.primaryLang, 'node');
+  assert.ok(!fs.existsSync(path.join(root, '.context/CONTEXT.md')));
+  assert.ok(!fs.existsSync(path.join(root, '.context')));
+});

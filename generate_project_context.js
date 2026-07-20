@@ -876,7 +876,6 @@ async function main() {
   catch (e) { console.error(e.message); process.exit(1); }
   const root = process.cwd();
   const repoName = path.basename(root);
-  seedIgnoreFile(root, args.contextDir);
   let detection = detectStack(root);
   let appDir = '.';
   if (detection.primaryLang === 'unknown' && process.stdin.isTTY) {
@@ -890,6 +889,9 @@ async function main() {
   const dbHints = detectDatabases(root, appDir);
   const versions = extractVersions(root, appDir, detection);
   if (args.debugDetection) { console.log(JSON.stringify({ repoName, detection, devEnv, dbHints, versions, useAi: args.useAi }, null, 2)); return; }
+  // All filesystem writes happen after the debug-detection early-return above,
+  // so --debug-detection stays strictly read-only.
+  seedIgnoreFile(root, args.contextDir);
   const ai = checkAiAvailable(args);
   if (!ai.useAi && args.useAi) log.info(ai.reason);
   const ignoreFn = createIgnoreMatcher({ root, contextDir: args.contextDir });

@@ -1,10 +1,95 @@
 # generate_project_context
 
-Auto-detects your tech stack and generates a single markdown context file for your project. Extracts database schemas, entity definitions, state shapes, routes, and services — structured for AI agents and easy to share. Supports React Native, Symfony, Laravel, Django, Rails, and Go.
+Generates an ICM `.context/` folder structure for any project — numbered
+stages of focused markdown context that AI agents can navigate selectively,
+instead of one monolithic context file.
+Based on the Interpretable Context Methodology (https://arxiv.org/html/2603.16021v2).
 
----
+## Requirements
 
-## Supported Stacks
+- Node.js >= 18 (no npm dependencies)
+- git _(optional — enables git activity + AI focus sections)_
+- Claude CLI or Gemini CLI _(optional — enables AI summaries)_
+
+## Installation
+
+**Option 1 — project-local**
+
+Copy `generate_project_context.js` into your project.
+
+**Option 2 — global**
+
+```bash
+cp generate_project_context.js /usr/local/bin/generate_project_context
+chmod +x /usr/local/bin/generate_project_context
+```
+
+## Usage
+
+```bash
+node generate_project_context.js [--no-ai] [--ai <claude|gemini>] [--context-dir <dir>] [--depth <n>] [--debug-detection]
+```
+
+| Flag | Description | Default |
+|---|---|---|
+| `--no-ai` | Skip all AI calls, static extraction only | AI enabled |
+| `--ai <claude\|gemini>` | Choose which AI CLI to use | `claude` |
+| `--context-dir <dir>` | Directory to write the context tree into | `.context` |
+| `--depth <n>` | Directory tree depth | `3` |
+| `--debug-detection` | Print detected stack/environment JSON and exit — read-only, writes nothing | off |
+
+## Output structure
+
+```
+.context/
+  CONTEXT.md                     # router — stage index, links into each stage
+  _config/
+    ignore                       # seeded once with defaults; never overwritten
+    manifest.json                # parse ledger (written last, after all stages)
+  stages/
+    01_overview/     CONTEXT.md + output/   # stack, environment, metrics
+    02_architecture/ CONTEXT.md + output/   # directory structure, git activity
+    03_data/         CONTEXT.md + output/   # schema, entities, state, migrations
+    04_interfaces/   CONTEXT.md + output/   # routes, controllers, services, API spec
+    05_documentation/CONTEXT.md + output/   # markdown docs index + per-file digests/summaries
+    06_synthesis/    CONTEXT.md + output/   # AI overview, architecture notes, dev focus (skipped without AI)
+```
+
+Each stage's `CONTEXT.md` documents its own **Inputs**, **Process**, and
+**Outputs** so an agent can decide whether to open that stage at all.
+
+## The ledger (incremental re-runs)
+
+`_config/manifest.json` tracks every markdown file the documentation stage has
+parsed, keyed by repo-relative path:
+
+- **sha256 skip** — if a file's hash and its existing digest/summary output are
+  unchanged since the last run, it's skipped (no re-parse, no AI call).
+- **AI upgrade** — a file previously parsed with `--no-ai` gets re-parsed and
+  upgraded to an AI summary the next time AI is available, even if its content
+  hasn't changed.
+- **Deletion cleanup** — files removed from the repo since the last run are
+  dropped from the ledger and their digest/summary output is deleted.
+- **Manifest written last** — `manifest.json` is only written after every
+  stage (including the router) has finished, so a run that fails partway
+  through never leaves a ledger pointing at outputs that don't exist.
+
+## Ignore rules
+
+Three layers apply in order, each adding to the last:
+
+1. **Built-in defaults** — `node_modules`, `vendor`, `.git`, `dist`, `build`,
+   `.next`, `__pycache__`, `.venv`, etc.
+2. **Repo `.gitignore`** — read from the project root, if present.
+3. **`.context/_config/ignore`** — seeded once with the defaults on first run,
+   then left alone; edit it freely to exclude project-specific paths. It is
+   never overwritten by later runs.
+
+Patterns use gitignore-style syntax (comments, blank lines, `*`/`?`/`**`
+globs, trailing `/` for directories, leading `/` to anchor at the repo root).
+**Negation (`!`) is not supported** and such lines are ignored.
+
+## Supported stacks
 
 | Stack | Schema | Entities | State |
 |---|---|---|---|
@@ -15,118 +100,14 @@ Auto-detects your tech stack and generates a single markdown context file for yo
 | Rails | `db/schema.rb` | ActiveRecord associations + validations | — |
 | Go | Struct definitions | Type definitions | — |
 
----
+## For agents
 
-## Installation
+Read `.context/CONTEXT.md` first; it's the router into the stage index. Load
+only the stage `output/` files you actually need for the task at hand instead
+of pulling the whole tree into context.
 
-### Option 1 — project-local
-
-Copy the script into your project and make it executable:
-
-```bash
-cp generate_project_context.sh /your-project/scripts/generate_project_context.sh
-chmod +x /your-project/scripts/generate_project_context.sh
-```
-
-Run from your project root:
+## Tests
 
 ```bash
-bash scripts/generate_project_context.sh
+node --test
 ```
-
-### Option 2 — global (run from any project)
-
-```bash
-cp generate_project_context.sh /usr/local/bin/generate_project_context
-chmod +x /usr/local/bin/generate_project_context
-```
-
-Then from any project root:
-
-```bash
-generate_project_context
-```
-
----
-
-## Requirements
-
-- **bash** 3.2+
-- **jq** — for JSON parsing (`brew install jq` / `apt install jq`)
-- **git** — for commit history and recent activity
-- **tree** _(optional)_ — for richer directory output (`brew install tree`)
-- **Claude CLI or Gemini CLI** _(optional)_ — for AI-generated summaries (`npm install -g @anthropic-ai/claude-code`)
-
----
-
-## Usage
-
-```bash
-bash generate_project_context.sh [options]
-```
-
-### Options
-
-| Flag | Description | Default |
-|---|---|---|
-| `--no-ai` | Skip all AI calls, static extraction only | AI enabled |
-| `--ai <claude\|gemini>` | Choose which AI CLI to use | `claude` |
-| `--output-dir <dir>` | Directory to write the output file | `docs` |
-| `--depth <n>` | Directory tree depth | `3` |
-| `--debug-detection` | Print detected stack variables and exit | off |
-
-### Examples
-
-```bash
-# Static only — fast, no AI required
-bash generate_project_context.sh --no-ai
-
-# Use Gemini instead of Claude
-bash generate_project_context.sh --ai gemini
-
-# Write output to the project root
-bash generate_project_context.sh --output-dir .
-
-# Debug what the script detected about your stack
-bash generate_project_context.sh --debug-detection
-```
-
----
-
-## Output
-
-The script writes a single markdown file to `<output-dir>/<repo-name>-context.md`.
-
-It contains:
-
-- **Overview** — auto-detected stack, database, dev environment
-- **Document Context** — links to all markdown files in the project
-- **Metrics** — file counts by language, entity/controller/service counts
-- **Technology Stack** — framework, versions, dependencies
-- **Project Structure** — directory tree
-- **Data Models** — model/entity file signatures
-- **Database Schema** — CREATE TABLE blocks, migrations, or schema files (stack-dependent)
-- **Entity Definitions** — full type/interface/model definitions (stack-dependent)
-- **Store Shapes** — state interface declarations (React Native / Node only)
-- **API Routes** — extracted route table or raw route list
-- **Controllers** — public method signatures
-- **Services** — public method signatures
-- **Migrations** — latest migration files
-- **Environment Variables** — masked `.env` / `.env.example`
-- **Development Setup** — start commands for detected dev environment
-- **Recent Git Activity** — last 15 commits
-- **Architecture Notes** — AI-generated pattern analysis (if AI enabled)
-- **Current Development Focus** — AI-generated from recent commits (if AI enabled)
-- **API Specification** — parsed OpenAPI/Swagger spec (if found and AI enabled)
-
----
-
-## How it works
-
-1. **Stack detection** — inspects `composer.json`, `package.json`, `go.mod`, `Gemfile`, `requirements.txt` etc. to identify framework and language
-2. **Dev environment detection** — checks for Lando, Docker Compose, devcontainer, or Makefile
-3. **Database detection** — scans config files for MySQL, PostgreSQL, SQLite, MongoDB, Redis hints
-4. **Static extraction** — pulls schemas, types, store shapes, routes, and service signatures using `grep` and `awk`
-5. **AI analysis** _(optional)_ — passes extracted content to Claude or Gemini for project overview, architecture notes, and development focus
-
-If the stack cannot be detected in the repo root, the script will prompt for a subdirectory path.
