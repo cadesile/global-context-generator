@@ -470,8 +470,14 @@ function migrationsBlock(ctx) {
 function envBlock(ctx) {
   const mask = (c) => c.split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.replace(/=.*/, '=***')).join('\n');
   const plain = (c) => c.split('\n').filter((l) => l && !l.startsWith('#')).join('\n');
-  for (const [f, fn] of [['.env.example', plain], ['.env', mask]]) {
-    const c = readText(path.join(ctx.root, ctx.appDir, f)) ?? readText(path.join(ctx.root, f));
+  const candidates = [
+    [path.join(ctx.root, ctx.appDir, '.env.example'), plain],
+    [path.join(ctx.root, ctx.appDir, '.env'), mask],
+    [path.join(ctx.root, '.env.example'), plain],
+    [path.join(ctx.root, '.env'), mask],
+  ];
+  for (const [p, fn] of candidates) {
+    const c = readText(p);
     if (c) return fn(c) + '\n';
   }
   return 'No .env or .env.example found.\n';

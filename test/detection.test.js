@@ -62,3 +62,14 @@ test('laravel extractors: migrations and eloquent models', () => {
   const labels = g.sectionLabels(d, 'MySQL');
   assert.strictEqual(labels.entities, 'Eloquent Model Definitions');
 });
+
+test('envBlock prefers app subdir .env over root .env.example', () => {
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'icm-env-'));
+  fs.mkdirSync(path.join(tmp, 'app'));
+  fs.writeFileSync(path.join(tmp, 'app/.env'), 'APP_SECRET=hidden\n');
+  fs.writeFileSync(path.join(tmp, '.env.example'), 'ROOT_VAR=example\n');
+  const out = g.envBlock({ root: tmp, appDir: 'app' });
+  assert.match(out, /APP_SECRET=\*\*\*/);
+  assert.ok(!out.includes('ROOT_VAR'));
+});
