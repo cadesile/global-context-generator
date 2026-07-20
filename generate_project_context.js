@@ -19,7 +19,7 @@ const log = {
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const args = { useAi: true, aiCli: 'claude', contextDir: '.context', treeDepth: 3, debugDetection: false };
+  const args = { useAi: true, aiCli: 'claude', contextDir: '.context', treeDepth: 3, debugDetection: false, dir: '.' };
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
       case '--no-ai': args.useAi = false; break;
@@ -27,6 +27,7 @@ function parseArgs(argv) {
       case '--context-dir': args.contextDir = argv[++i]; break;
       case '--depth': args.treeDepth = parseInt(argv[++i], 10); if (Number.isNaN(args.treeDepth)) args.treeDepth = 3; break;
       case '--debug-detection': args.debugDetection = true; break;
+      case '--dir': args.dir = argv[++i]; break;
       default: throw new Error(`Unknown option: ${argv[i]}`);
     }
   }
@@ -877,7 +878,8 @@ async function main() {
   let args;
   try { args = parseArgs(process.argv.slice(2)); }
   catch (e) { console.error(e.message); process.exit(1); }
-  const root = process.cwd();
+  const root = path.resolve(args.dir ?? '.');
+  if (!isDir(root)) { console.error(`Directory not found: ${args.dir}`); process.exit(1); }
   const repoName = path.basename(root);
   let detection = detectStack(root);
   let appDir = '.';

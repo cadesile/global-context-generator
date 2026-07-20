@@ -5,12 +5,12 @@ const g = require('../generate_project_context.js');
 
 test('parseArgs defaults', () => {
   const a = g.parseArgs([]);
-  assert.deepStrictEqual(a, { useAi: true, aiCli: 'claude', contextDir: '.context', treeDepth: 3, debugDetection: false });
+  assert.deepStrictEqual(a, { useAi: true, aiCli: 'claude', contextDir: '.context', treeDepth: 3, debugDetection: false, dir: '.' });
 });
 
 test('parseArgs flags', () => {
   const a = g.parseArgs(['--no-ai', '--ai', 'gemini', '--context-dir', 'ctx', '--depth', '5', '--debug-detection']);
-  assert.deepStrictEqual(a, { useAi: false, aiCli: 'gemini', contextDir: 'ctx', treeDepth: 5, debugDetection: true });
+  assert.deepStrictEqual(a, { useAi: false, aiCli: 'gemini', contextDir: 'ctx', treeDepth: 5, debugDetection: true, dir: '.' });
 });
 
 test('parseArgs unknown flag throws', () => {
@@ -84,4 +84,8 @@ test('mdDigest extracts title, headings, word count', () => {
 
 test('parseArgs --depth falls back to 3 on non-numeric', () => {
   assert.strictEqual(g.parseArgs(['--depth', 'abc']).treeDepth, 3);
+});
+
+test('parseArgs --dir', () => {
+  assert.strictEqual(g.parseArgs(['--dir', '/some/place']).dir, '/some/place');
 });

@@ -154,3 +154,22 @@ test('nested --context-dir produces correct index link depth', () => {
   const index = fs.readFileSync(path.join(root, 'docs/ctx/stages/05_documentation/output/index.md'), 'utf8');
   assert.match(index, /\]\(\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/README\.md\)/, 'root README needs five ../ from a two-segment context dir');
 });
+
+test('--dir targets another project from a different cwd', () => {
+  const os = require('node:os');
+  const target = copyFixture('expo-app');
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'icm-elsewhere-'));
+  const r = runGenerator(elsewhere, ['--no-ai', '--dir', target]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(fs.existsSync(path.join(target, '.context/CONTEXT.md')), '.context created in target');
+  assert.ok(!fs.existsSync(path.join(elsewhere, '.context')), 'nothing written to cwd');
+});
+
+test('--dir with missing path exits 1 without writes', () => {
+  const os = require('node:os');
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'icm-elsewhere2-'));
+  const r = runGenerator(elsewhere, ['--no-ai', '--dir', path.join(elsewhere, 'nope')]);
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /Directory not found/);
+  assert.ok(!fs.existsSync(path.join(elsewhere, '.context')), 'no writes on failure');
+});

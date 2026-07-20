@@ -27,7 +27,7 @@ chmod +x /usr/local/bin/generate_project_context
 ## Usage
 
 ```bash
-node generate_project_context.js [--no-ai] [--ai <claude|gemini>] [--context-dir <dir>] [--depth <n>] [--debug-detection]
+node generate_project_context.js [--no-ai] [--ai <claude|gemini>] [--context-dir <dir>] [--depth <n>] [--dir <path>] [--debug-detection]
 ```
 
 | Flag | Description | Default |
@@ -36,7 +36,18 @@ node generate_project_context.js [--no-ai] [--ai <claude|gemini>] [--context-dir
 | `--ai <claude\|gemini>` | Choose which AI CLI to use | `claude` |
 | `--context-dir <dir>` | Directory to write the context tree into | `.context` |
 | `--depth <n>` | Directory tree depth | `3` |
+| `--dir <path>` | Target project root (run the generator from anywhere) | current directory |
 | `--debug-detection` | Print detected stack/environment JSON and exit — read-only, writes nothing | off |
+
+### Examples
+
+```bash
+# Generate context for the current project
+node generate_project_context.js
+
+# Generate context for another project without cd-ing into it
+node ~/Projects/global-context-generator/generate_project_context.js --ai gemini --dir /some/place/local
+```
 
 ## Output structure
 
