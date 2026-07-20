@@ -146,3 +146,11 @@ test('--debug-detection prints JSON and writes nothing', () => {
   assert.ok(!fs.existsSync(path.join(root, '.context/CONTEXT.md')));
   assert.ok(!fs.existsSync(path.join(root, '.context')));
 });
+
+test('nested --context-dir produces correct index link depth', () => {
+  const root = copyFixture('expo-app');
+  const r = runGenerator(root, ['--no-ai', '--context-dir', 'docs/ctx']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const index = fs.readFileSync(path.join(root, 'docs/ctx/stages/05_documentation/output/index.md'), 'utf8');
+  assert.match(index, /\]\(\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/README\.md\)/, 'root README needs five ../ from a two-segment context dir');
+});

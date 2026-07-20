@@ -25,7 +25,7 @@ function parseArgs(argv) {
       case '--no-ai': args.useAi = false; break;
       case '--ai': args.aiCli = argv[++i]; break;
       case '--context-dir': args.contextDir = argv[++i]; break;
-      case '--depth': args.treeDepth = parseInt(argv[++i], 10); break;
+      case '--depth': args.treeDepth = parseInt(argv[++i], 10); if (Number.isNaN(args.treeDepth)) args.treeDepth = 3; break;
       case '--debug-detection': args.debugDetection = true; break;
       default: throw new Error(`Unknown option: ${argv[i]}`);
     }
@@ -751,6 +751,9 @@ function runDocumentationStage(ctx, oldManifest, aiSummarize) {
   }
   stats.removed = Object.keys(oldManifest.parsed_markdown).filter((rel) => !parsedMarkdown[rel]).length;
 
+  const upLevels = ctx.contextDir.split('/').filter(Boolean).length + 3;
+  const linkPrefix = '../'.repeat(upLevels);
+
   let indexMd = '# Documentation Index\n';
   let prevDir = null;
   for (const rel of mdFiles) {
@@ -758,7 +761,7 @@ function runDocumentationStage(ctx, oldManifest, aiSummarize) {
     if (dir !== prevDir) { indexMd += `\n**${dir === '.' ? '(root)' : dir + '/'}**\n`; prevDir = dir; }
     const entry = parsedMarkdown[rel];
     const slugFile = path.posix.basename(entry.summary);
-    indexMd += `- [${rel}](../../../../${rel}) — [digest](summaries/${slugFile})\n`;
+    indexMd += `- [${rel}](${linkPrefix}${rel}) — [digest](summaries/${slugFile})\n`;
   }
   return { indexMd, summaries, parsedMarkdown, stats };
 }

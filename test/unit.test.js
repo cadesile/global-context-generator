@@ -81,3 +81,7 @@ test('mdDigest extracts title, headings, word count', () => {
   assert.deepStrictEqual(d.headings, ['## Section A', '### Sub B']);
   assert.ok(d.wordCount > 3);
 });
+
+test('parseArgs --depth falls back to 3 on non-numeric', () => {
+  assert.strictEqual(g.parseArgs(['--depth', 'abc']).treeDepth, 3);
+});
