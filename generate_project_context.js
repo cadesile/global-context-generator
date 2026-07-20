@@ -556,6 +556,100 @@ function findOpenApiFile(ctx) {
   }
   return '';
 }
+// ── AI integration (port of bash lines 58–69, 71–84, 311–339, 368–437) ──────
+function checkAiAvailable(args) {
+  if (!args.useAi) return { useAi: false, reason: '--no-ai' };
+  if (process.env.CLAUDECODE && args.aiCli === 'claude') {
+    return { useAi: false, reason: 'Running inside a Claude Code session — AI summaries skipped (nested sessions not supported).' };
+  }
+  const which = spawnSync('which', [args.aiCli], { encoding: 'utf8' });
+  if (which.status !== 0 || !which.stdout || !which.stdout.trim()) {
+    return { useAi: false, reason: `${args.aiCli} CLI not found — AI summaries skipped. Install ${args.aiCli} to enable.` };
+  }
+  return { useAi: true, reason: `${args.aiCli} CLI detected — AI summaries enabled.` };
+}
+
+function callAi(aiCli, prompt) {
+  try {
+    const r = spawnSync(aiCli, ['-p', prompt], { encoding: 'utf8', timeout: 120000 });
+    const out = (r.stdout || '').trim();
+    if (r.error || r.status !== 0 || !out) {
+      log.warn(`${aiCli} returned empty for: ${prompt.slice(0, 60)}...`);
+      return '';
+    }
+    return out;
+  } catch (e) {
+    log.warn(`${aiCli} failed: ${e.message}`);
+    return '';
+  }
+}
+
+// Port of bash lines 311–339: sample key project files into a char-budgeted block.
+function collectAiContextFiles(ctx) {
+  let out = '';
+  let charsUsed = 0;
+  const budget = 6000;
+  const appPrefix = (f) => path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, f);
+  const addFile = (rel) => {
+    if (charsUsed >= budget) return;
+    const abs = path.join(ctx.root, rel);
+    if (!exists(abs) || isDir(abs)) return;
+    let content;
+    try { content = fs.readFileSync(abs, 'utf8').slice(0, 800); } catch { return; }
+    out += `### ${rel}\n\`\`\`\n${content}\n\`\`\`\n\n`;
+    charsUsed += content.length;
+  };
+  for (const f of ['composer.json', 'package.json', 'go.mod', 'Cargo.toml', 'Gemfile', 'requirements.txt', 'pyproject.toml']) {
+    addFile(appPrefix(f));
+  }
+  addFile(appPrefix('config/packages/security.yaml'));
+  addFile('README.md');
+  const envRel = appPrefix('.env');
+  const envContent = readText(path.join(ctx.root, envRel));
+  if (envContent !== null) {
+    const masked = envContent.split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.replace(/=.*/, '=***')).join('\n');
+    out += `### ${envRel} (masked)\n\`\`\`\n${masked}\n\`\`\`\n\n`;
+  }
+  if (ctx.detection.modelsDir) {
+    for (const f of filesUnder(ctx, ctx.detection.modelsDir, '.' + ctx.detection.primaryExt).slice(0, 6)) addFile(f);
+  }
+  if (ctx.detection.controllersDir) {
+    for (const f of filesUnder(ctx, ctx.detection.controllersDir, '.' + ctx.detection.primaryExt).filter((f) => !f.includes('/Admin/')).slice(0, 4)) addFile(f);
+  }
+  return out;
+}
+
+function makeAiSummarizer(ctx) {
+  return (rel, content) => callAi(ctx.aiCli, `Summarize this project documentation file for an AI coding agent. File: ${rel}. Content (truncated to 6000 chars): ${content.slice(0, 6000)}. Write 2-4 sentences covering what the doc describes and when an agent should read it. Output only the summary.`);
+}
+
+// basename lists for the architecture-notes prompt (bash lines 385–390).
+function _basenameList(ctx, dir) {
+  if (!dir) return 'none';
+  const files = filesUnder(ctx, dir, '.' + ctx.detection.primaryExt);
+  if (!files.length) return 'none';
+  return files.map((f) => path.basename(f, '.' + ctx.detection.primaryExt)).sort().join(', ');
+}
+function _sourceDirList(ctx) {
+  const sourceDir = ctx.detection.sourceDir || '.';
+  const base = path.join(ctx.root, sourceDir);
+  if (!isDir(base)) return '';
+  const dirs = [sourceDir];
+  (function recur(relFromSource) {
+    const abs = relFromSource ? path.join(base, relFromSource) : base;
+    let entries;
+    try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
+    for (const e of entries.filter((x) => x.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+      const childRel = relFromSource ? `${relFromSource}/${e.name}` : e.name;
+      const fullRel = path.posix.join(sourceDir, childRel);
+      if (ctx.ignoreFn(fullRel)) continue;
+      dirs.push(fullRel);
+      recur(childRel);
+    }
+  })('');
+  return dirs.sort().slice(0, 30).join('\n');
+}
+
 function sectionLabels(detection, dbHints) {
   const s = detection.stacks; const db = dbHints || 'SQL';
   if (s.node) return { schema: 'Database Schema (SQLite)', entities: 'TypeScript Entity Definitions', state: 'Store Shapes (State)' };
@@ -704,7 +798,9 @@ function buildStages01to04(ctx) {
   const labels = sectionLabels(ctx.detection, ctx.dbHints);
   const label = stackLabel(ctx.detection, ctx.versions, ctx.devEnv, ctx.dbHints);
   const openApiFile = findOpenApiFile(ctx);
-  const openApiRaw = openApiFile ? `> Source: \`${openApiFile}\`\n\n` + codeFence('', (readText(path.join(ctx.root, openApiFile)) || '').slice(0, 4000)) : '';
+  const openApiRaw = ctx.aiOpenApi
+    ? ctx.aiOpenApi
+    : openApiFile ? `> Source: \`${openApiFile}\`\n\n` + codeFence('', (readText(path.join(ctx.root, openApiFile)) || '').slice(0, 4000)) : '';
   return [
     { name: '01_overview',
       contract: { inputs: ['source: composer.json / package.json / go.mod / Gemfile / requirements.txt (stack + versions)', 'source: .lando.yml / docker-compose.yml / .devcontainer / Makefile (dev env)', 'source: .env / .env.example (masked)'],
@@ -794,8 +890,43 @@ async function main() {
   const dbHints = detectDatabases(root, appDir);
   const versions = extractVersions(root, appDir, detection);
   if (args.debugDetection) { console.log(JSON.stringify({ repoName, detection, devEnv, dbHints, versions, useAi: args.useAi }, null, 2)); return; }
+  const ai = checkAiAvailable(args);
+  if (!ai.useAi && args.useAi) log.info(ai.reason);
   const ignoreFn = createIgnoreMatcher({ root, contextDir: args.contextDir });
-  const ctx = { root, appDir, detection, devEnv, dbHints, versions, ignoreFn, treeDepth: args.treeDepth, contextDir: args.contextDir, useAi: args.useAi, aiCli: args.aiCli, repoName };
+  const ctx = { root, appDir, detection, devEnv, dbHints, versions, ignoreFn, treeDepth: args.treeDepth, contextDir: args.contextDir, useAi: ai.useAi, aiCli: args.aiCli, repoName };
+
+  // OpenAPI AI summary must be computed before buildStages01to04() so stage 04's
+  // api-spec.md can use it (bash lines 412–437).
+  if (ai.useAi) {
+    const openApiFile = findOpenApiFile(ctx);
+    if (openApiFile) {
+      log.info(`Calling ${args.aiCli} — analysing OpenAPI spec (${openApiFile})...`);
+      const specContent = (readText(path.join(root, openApiFile)) || '').slice(0, 8000);
+      const result = callAi(args.aiCli, `You are documenting a REST API from its OpenAPI/Swagger specification.
+
+Spec file: ${openApiFile}
+Contents (truncated to 8000 chars):
+${specContent}
+
+Produce a concise API reference in this exact format:
+
+### Overview
+One paragraph summarising the API's purpose, version, and base URL if present.
+
+### Authentication
+How the API is secured (bearer token, API key, OAuth, etc.), or 'None specified' if absent.
+
+### Endpoints
+A markdown table with columns: Method | Path | Summary
+List every endpoint found. Group by tag/resource if tags are present.
+
+### Key Schemas
+Bullet list of the most important request/response schemas with their key fields.
+
+Output only the above sections — no preamble, no trailing commentary.`);
+      if (result) ctx.aiOpenApi = `> Source: \`${openApiFile}\`\n\n${result}`;
+    }
+  }
 
   const stageIndex = [];
   const purposes = { '01_overview': 'Stack, environment, metrics', '02_architecture': 'Structure and git activity', '03_data': 'Schema, entities, state, migrations', '04_interfaces': 'Routes, controllers, services, API spec' };
@@ -806,7 +937,8 @@ async function main() {
   }
   const manifest = loadManifest(root, args.contextDir, repoName);
   log.info('Stage 05_documentation...');
-  const docResult = runDocumentationStage(ctx, manifest, () => '');  // real AI summarizer injected in Task 7
+  const summarizer = ai.useAi ? makeAiSummarizer(ctx) : () => '';
+  const docResult = runDocumentationStage(ctx, manifest, summarizer);
   const doc05Outputs = { 'index.md': docResult.indexMd };
   for (const [f, c] of Object.entries(docResult.summaries)) doc05Outputs[`summaries/${f}`] = c;
   const written05 = writeStage(root, args.contextDir, '05_documentation', {
@@ -817,9 +949,68 @@ async function main() {
   log.info(`Docs: ${docResult.stats.parsed} parsed, ${docResult.stats.skipped} skipped (unchanged), ${docResult.stats.removed} removed`);
   stageIndex.push({ stage: '05_documentation', purpose: 'Markdown docs index and digests', files: written05.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages/05_documentation/output', f)).size })) });
 
-  // Stage 06 lands in Task 7; write a placeholder contract so the skeleton is complete:
-  writeStage(root, args.contextDir, '06_synthesis', { inputs: ['stage outputs 01–05'], process: 'AI synthesis (implemented in Task 7).', outputs: [] }, {});
-  stageIndex.push({ stage: '06_synthesis', purpose: 'AI overview, architecture notes, focus', files: [] });
+  log.info('Stage 06_synthesis...');
+  let stage06Outputs = {};
+  let stage06Process;
+  if (ai.useAi) {
+    const keyFiles = collectAiContextFiles(ctx);
+    const gitLog = git(root, ['log', '--oneline', '-10']) || 'No git history';
+    const gitRecent = git(root, ['diff', '--name-only', 'HEAD~5', 'HEAD']).split('\n').slice(0, 20).join('\n');
+
+    log.info(`Calling ${args.aiCli} — project overview...`);
+    const overview = callAi(args.aiCli, `You are generating documentation for a software project.
+
+Project name: ${repoName}
+Detected framework: ${detection.primaryFramework} (${detection.primaryLang})
+Dev environment: ${devEnv.devEnv}
+Database: ${dbHints}
+Recent commits:
+${gitLog}
+
+Key project files (truncated):
+${keyFiles.slice(0, 3000)}
+
+Write a concise 2-3 sentence project overview describing what it does, its purpose, and primary architectural approach. Output only the overview text — no preamble, no heading.`);
+
+    log.info(`Calling ${args.aiCli} — architecture notes...`);
+    const entityList = _basenameList(ctx, detection.modelsDir);
+    const serviceList = _basenameList(ctx, detection.servicesDir);
+    const dirList = _sourceDirList(ctx);
+    const architecture = callAi(args.aiCli, `Analyse this ${detection.primaryFramework} (${detection.primaryLang}) codebase.
+
+Entities/models: ${entityList}
+Services: ${serviceList}
+Source directories:
+${dirList}
+
+Identify 3-5 key architectural patterns (e.g. repository pattern, service layer, DTO, CQRS). Base this only on the directory structure and class names provided. Return a markdown bullet list only — no preamble, no heading.`);
+
+    log.info(`Calling ${args.aiCli} — development focus areas...`);
+    const focus = callAi(args.aiCli, `Analyse recent development activity on a ${detection.primaryFramework} project.
+
+Recent commits:
+${gitLog}
+
+Recently modified files:
+${gitRecent}
+
+Based solely on the above, identify 3-5 areas of active development that would benefit from AI assistance. Return a markdown bullet list only — no preamble, no heading.`);
+
+    stage06Outputs = {
+      'overview.md': overview ? `# Project Overview\n\n${overview}` : '',
+      'architecture-notes.md': architecture ? `# Architecture Notes\n\n${architecture}` : '',
+      'current-focus.md': focus ? `# Current Development Focus\n\n${focus}` : '',
+    };
+    stage06Process = `AI synthesis via ${args.aiCli}: project overview, architecture patterns, and development focus derived from stages 01–05 inputs.`;
+  } else {
+    stage06Process = `Not executed — AI was unavailable (${ai.reason || '--no-ai'}). Re-run with an AI CLI (claude or gemini) on PATH to generate synthesis.`;
+  }
+  const written06 = writeStage(root, args.contextDir, '06_synthesis', {
+    inputs: ['working: stage 01–05 outputs', 'source: git log', 'source: key project files (truncated samples)'],
+    process: stage06Process,
+    outputs: [{ file: 'overview.md', desc: 'AI project overview' }, { file: 'architecture-notes.md', desc: 'AI pattern analysis' }, { file: 'current-focus.md', desc: 'AI reading of recent commits' }],
+  }, stage06Outputs);
+  stageIndex.push({ stage: '06_synthesis', purpose: 'AI overview, architecture notes, focus', files: written06.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages/06_synthesis/output', f)).size })) });
   writeRouter(root, args.contextDir, { repoName, label: stackLabel(detection, versions, devEnv, dbHints), stageIndex });
   log.success(`${args.contextDir}/ generated`);
   log.info('Tip: add "Read .context/CONTEXT.md first" to your CLAUDE.md / AGENTS.md.');
@@ -840,5 +1031,6 @@ module.exports = {
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
+  checkAiAvailable, callAi, collectAiContextFiles, makeAiSummarizer,
 };
 if (require.main === module) main();

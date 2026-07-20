@@ -67,3 +67,43 @@ test('stage 05 indexes docs, excludes vendored md, and ledger skips unchanged fi
   assert.match(r2.stderr, /skipped/i);
   assert.strictEqual(m2.parsed_markdown['docs/stable.md'].parsed_at, m1.parsed_markdown['docs/stable.md'].parsed_at);
 });
+
+test('fake AI CLI: stage 06 outputs and md summaries with upgrade on re-run', () => {
+  const root = copyFixture('expo-app');
+  const os = require('node:os');
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'icm-bin-'));
+  const fake = path.join(binDir, 'claude');
+  fs.writeFileSync(fake, '#!/bin/sh\necho "FAKE_AI_OUTPUT"\n');
+  fs.chmodSync(fake, 0o755);
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+  delete env.CLAUDECODE;
+  const { spawnSync } = require('node:child_process');
+  const SCRIPT = path.join(__dirname, '..', 'generate_project_context.js');
+
+  // First run without AI, then with AI: ledger must upgrade ai_summarized files.
+  let r = spawnSync(process.execPath, [SCRIPT, '--no-ai'], { cwd: root, encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const ctxDir = path.join(root, '.context');
+  assert.match(fs.readFileSync(path.join(ctxDir, 'stages/06_synthesis/output/overview.md'), 'utf8'), /FAKE_AI_OUTPUT/);
+  assert.match(fs.readFileSync(path.join(ctxDir, 'stages/05_documentation/output/summaries/readme.md'), 'utf8'), /FAKE_AI_OUTPUT/);
+  const m = JSON.parse(fs.readFileSync(path.join(ctxDir, '_config/manifest.json'), 'utf8'));
+  assert.strictEqual(m.parsed_markdown['README.md'].ai_summarized, true);
+
+  // Third run, AI still on PATH: unchanged files must be skipped (ledger seam closed) —
+  // parsed_at for README.md must NOT change since it's already ai_summarized.
+  const readmeParsedAt2 = m.parsed_markdown['README.md'].parsed_at;
+  r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const m3 = JSON.parse(fs.readFileSync(path.join(ctxDir, '_config/manifest.json'), 'utf8'));
+  assert.strictEqual(m3.parsed_markdown['README.md'].parsed_at, readmeParsedAt2);
+});
+
+test('no-ai run marks stage 06 as not executed', () => {
+  const root = copyFixture('expo-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const contract = fs.readFileSync(path.join(root, '.context/stages/06_synthesis/CONTEXT.md'), 'utf8');
+  assert.match(contract, /not executed/i);
+});
