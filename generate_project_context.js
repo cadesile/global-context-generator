@@ -567,13 +567,173 @@ function sectionLabels(detection, dbHints) {
   return { schema: 'Database Schema', entities: 'Entity Definitions', state: '' };
 }
 
-function main() {
+// ── ICM stage writers ────────────────────────────────────────────────────────
+function writeStage(root, contextDir, stageName, contract, outputs) {
+  const stageDir = path.join(root, contextDir, 'stages', stageName);
+  const outDir = path.join(stageDir, 'output');
+  fs.rmSync(outDir, { recursive: true, force: true });
+  fs.mkdirSync(outDir, { recursive: true });
+  const written = [];
+  for (const [file, content] of Object.entries(outputs)) {
+    if (!content || !content.trim()) continue;
+    fs.writeFileSync(path.join(outDir, file), content.trimEnd() + '\n');
+    written.push(file);
+  }
+  const contractMd = [
+    `# Stage ${stageName}`, '',
+    '## Inputs', ...contract.inputs.map((i) => `- ${i}`), '',
+    '## Process', contract.process, '',
+    '## Outputs',
+    ...contract.outputs.filter((o) => written.includes(o.file)).map((o) => `- output/${o.file} — ${o.desc}`),
+    ...(written.length === 0 ? ['- _No outputs produced (see Process notes)._'] : []),
+  ].join('\n') + '\n';
+  fs.writeFileSync(path.join(stageDir, 'CONTEXT.md'), contractMd);
+  return written;
+}
+
+function seedIgnoreFile(root, contextDir) {
+  const p = path.join(root, contextDir, '_config', 'ignore');
+  if (exists(p)) return false;
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, [
+    '# .context ignore rules (gitignore syntax; negation ! unsupported).',
+    '# Seeded with defaults on first run — edit freely, this file is never overwritten.',
+    ...DEFAULT_IGNORES,
+  ].join('\n') + '\n');
+  return true;
+}
+
+function stackLabel(detection, versions, devEnv, dbHints) {
+  let label = detection.primaryFramework;
+  if (versions.frameworkVersion) label += ` ${versions.frameworkVersion}`;
+  if (versions.phpVersion) label += ` · PHP ${versions.phpVersion}`;
+  if (versions.nodeVersion) label += ` · Node ${versions.nodeVersion}`;
+  if (devEnv.landoDb) label += ` · ${devEnv.landoDb}`;
+  else if (dbHints) label += ` · ${dbHints}`;
+  return label;
+}
+
+function devSetupBlock(ctx) {
+  switch (ctx.devEnv.devEnv) {
+    case 'lando': return codeFence('bash', `lando start\nlando composer install\n${ctx.devEnv.consoleCmd} migrate`);
+    case 'docker': return codeFence('bash', 'docker compose up -d\ndocker compose exec app composer install');
+    case 'make': return codeFence('bash', 'make dev');
+    default: return codeFence('bash', `${ctx.devEnv.runPrefix || 'npm'} install`);
+  }
+}
+
+function buildStages01to04(ctx) {
+  const labels = sectionLabels(ctx.detection, ctx.dbHints);
+  const label = stackLabel(ctx.detection, ctx.versions, ctx.devEnv, ctx.dbHints);
+  const openApiFile = findOpenApiFile(ctx);
+  const openApiRaw = openApiFile ? `> Source: \`${openApiFile}\`\n\n` + codeFence('', (readText(path.join(ctx.root, openApiFile)) || '').slice(0, 4000)) : '';
+  return [
+    { name: '01_overview',
+      contract: { inputs: ['source: composer.json / package.json / go.mod / Gemfile / requirements.txt (stack + versions)', 'source: .lando.yml / docker-compose.yml / .devcontainer / Makefile (dev env)', 'source: .env / .env.example (masked)'],
+        process: `Detected the tech stack (${label}), dev environment (${ctx.devEnv.devEnv}), databases (${ctx.dbHints || 'none found'}), and computed file metrics. All scans respect the ignore rules in _config/ignore.`,
+        outputs: [{ file: 'stack.md', desc: 'stack, versions, dependencies' }, { file: 'environment.md', desc: 'dev env, masked env vars, setup commands' }, { file: 'metrics.md', desc: 'file and component counts' }] },
+      outputs: {
+        'stack.md': `# Technology Stack\n\n| | |\n|---|---|\n| **Language** | ${ctx.detection.primaryLang} |\n| **Framework** | ${label} |\n| **Dev env** | ${ctx.devEnv.devEnv}${ctx.devEnv.landoRecipe ? ` (${ctx.devEnv.landoRecipe})` : ''} |\n${ctx.dbHints ? `| **Database** | ${ctx.dbHints} |\n` : ''}\n## Dependencies\n\n${depsBlock(ctx)}`,
+        'environment.md': `# Environment\n\n## Environment Variables\n\n${codeFence('', envBlock(ctx))}\n## Development Setup\n\n${devSetupBlock(ctx)}`,
+        'metrics.md': `# Metrics\n\n${metricsBlock(ctx)}`,
+      } },
+    { name: '02_architecture',
+      contract: { inputs: ['source: directory tree (ignore rules applied)', 'source: git log / git diff'],
+        process: 'Captured the directory structure and recent git activity.',
+        outputs: [{ file: 'structure.md', desc: 'directory tree' }, { file: 'git-activity.md', desc: 'recent commits and changed files' }] },
+      outputs: { 'structure.md': `# Project Structure\n\n${treeBlock(ctx)}`, 'git-activity.md': `# Recent Git Activity\n\n${gitActivityBlock(ctx)}` } },
+    { name: '03_data',
+      contract: { inputs: [`source: ${ctx.detection.modelsDir || 'model files'}`, 'source: migrations / schema files'],
+        process: `Extracted the data layer for ${ctx.detection.primaryFramework}: schema, entity definitions${labels.state ? ', store shapes' : ''}, and migrations.`,
+        outputs: [{ file: 'schema.md', desc: labels.schema }, { file: 'entities.md', desc: labels.entities }, { file: 'state.md', desc: labels.state || 'store shapes' }, { file: 'migrations.md', desc: 'latest migrations' }] },
+      outputs: {
+        'schema.md': `# ${labels.schema}\n\n${schemaBlock(ctx)}`,
+        'entities.md': `# ${labels.entities}\n\n${entitiesBlock(ctx)}`,
+        'state.md': labels.state ? `# ${labels.state}\n\n${stateBlock(ctx)}` : '',
+        'migrations.md': `# Migrations\n\n${migrationsBlock(ctx)}`,
+      } },
+    { name: '04_interfaces',
+      contract: { inputs: [`source: ${ctx.detection.controllersDir || 'controller files'}`, `source: ${ctx.detection.servicesDir || 'service files'}`, openApiFile ? `source: ${openApiFile}` : 'source: (no OpenAPI spec found)'],
+        process: 'Extracted API routes, controller and service signatures, and the OpenAPI spec if present.',
+        outputs: [{ file: 'routes.md', desc: 'API routes' }, { file: 'controllers.md', desc: 'controller signatures' }, { file: 'services.md', desc: 'service signatures' }, { file: 'api-spec.md', desc: 'OpenAPI/Swagger spec' }] },
+      outputs: {
+        'routes.md': routesBlock(ctx) ? `# API Routes\n\n${routesBlock(ctx)}` : '',
+        'controllers.md': controllersBlock(ctx) ? `# Controllers\n\n${controllersBlock(ctx)}` : '',
+        'services.md': servicesBlock(ctx) ? `# Services\n\n${servicesBlock(ctx)}` : '',
+        'api-spec.md': openApiRaw ? `# API Specification\n\n${openApiRaw}` : '',
+      } },
+  ];
+}
+
+function writeRouter(root, contextDir, { repoName, label, stageIndex }) {
+  const rows = stageIndex.map(({ stage, purpose, files }) =>
+    `| \`stages/${stage}/\` | ${purpose} | ${files.map((f) => `\`${f.rel}\` (${f.bytes}b)`).join(', ') || '—'} |`).join('\n');
+  const md = `# ${repoName} — Project Context (.context)
+
+> Generated: ${new Date().toISOString()} · Stack: ${label} · Generator: v${GENERATOR_VERSION}
+
+This folder is an **ICM (Interpretable Context Methodology)** context structure
+(https://arxiv.org/html/2603.16021v2): numbered stages, each with a CONTEXT.md
+contract (Inputs / Process / Outputs) and an output/ folder of focused markdown.
+
+## How to use this folder (for agents)
+
+1. Read this router.
+2. Pick the stages relevant to your task from the index below (numbering = recommended reading order).
+3. Read each chosen stage's CONTEXT.md, then load only the output files you need.
+4. Do not load every file — the structure exists so you can scope your context.
+
+Regenerate with: \`node generate_project_context.js\`. Ignore rules live in
+\`_config/ignore\`; the parse ledger in \`_config/manifest.json\`.
+
+## Stage index
+
+| Stage | Purpose | Output files |
+|---|---|---|
+${rows}
+`;
+  fs.writeFileSync(path.join(root, contextDir, 'CONTEXT.md'), md);
+}
+
+async function main() {
   if (parseInt(process.versions.node, 10) < 18) { log.warn('Node >= 18 required.'); process.exit(1); }
   let args;
   try { args = parseArgs(process.argv.slice(2)); }
   catch (e) { console.error(e.message); process.exit(1); }
-  log.info(`ICM context generator v${GENERATOR_VERSION} (wiring lands in later tasks)`);
-  void args;
+  const root = process.cwd();
+  const repoName = path.basename(root);
+  seedIgnoreFile(root, args.contextDir);
+  let detection = detectStack(root);
+  let appDir = '.';
+  if (detection.primaryLang === 'unknown' && process.stdin.isTTY) {
+    const readline = require('node:readline/promises');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    const sub = (await rl.question('  App code in a subdirectory? Enter path (or press Enter to skip): ')).trim();
+    rl.close();
+    if (sub && isDir(path.join(root, sub))) { detection = detectStack(root, sub); if (detection.primaryLang !== 'unknown') appDir = sub; }
+  }
+  const devEnv = detectDevEnv(root, detection);
+  const dbHints = detectDatabases(root, appDir);
+  const versions = extractVersions(root, appDir, detection);
+  if (args.debugDetection) { console.log(JSON.stringify({ repoName, detection, devEnv, dbHints, versions, useAi: args.useAi }, null, 2)); return; }
+  const ignoreFn = createIgnoreMatcher({ root, contextDir: args.contextDir });
+  const ctx = { root, appDir, detection, devEnv, dbHints, versions, ignoreFn, treeDepth: args.treeDepth, contextDir: args.contextDir, useAi: args.useAi, aiCli: args.aiCli, repoName };
+
+  const stageIndex = [];
+  const purposes = { '01_overview': 'Stack, environment, metrics', '02_architecture': 'Structure and git activity', '03_data': 'Schema, entities, state, migrations', '04_interfaces': 'Routes, controllers, services, API spec' };
+  for (const stage of buildStages01to04(ctx)) {
+    log.info(`Stage ${stage.name}...`);
+    const written = writeStage(root, args.contextDir, stage.name, stage.contract, stage.outputs);
+    stageIndex.push({ stage: stage.name, purpose: purposes[stage.name], files: written.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages', stage.name, 'output', f)).size })) });
+  }
+  // Stage 05 + 06 land in Tasks 6–7; write placeholder contracts so the skeleton is complete:
+  writeStage(root, args.contextDir, '05_documentation', { inputs: ['source: **/*.md (ignore rules applied)'], process: 'Markdown documentation parsing (implemented in Task 6).', outputs: [] }, {});
+  writeStage(root, args.contextDir, '06_synthesis', { inputs: ['stage outputs 01–05'], process: 'AI synthesis (implemented in Task 7).', outputs: [] }, {});
+  stageIndex.push({ stage: '05_documentation', purpose: 'Markdown docs index and digests', files: [] });
+  stageIndex.push({ stage: '06_synthesis', purpose: 'AI overview, architecture notes, focus', files: [] });
+  writeRouter(root, args.contextDir, { repoName, label: stackLabel(detection, versions, devEnv, dbHints), stageIndex });
+  log.success(`${args.contextDir}/ generated`);
+  log.info('Tip: add "Read .context/CONTEXT.md first" to your CLAUDE.md / AGENTS.md.');
 }
 
 module.exports = {
@@ -582,5 +742,6 @@ module.exports = {
   detectDatabases, extractVersions,
   schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
+  writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter,
 };
 if (require.main === module) main();
