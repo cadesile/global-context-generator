@@ -69,3 +69,15 @@ test('walkFiles finds md files, skips ignored dirs, sorted', () => {
   const files = g.walkFiles(tmp, ignored, { extensions: ['.md'] });
   assert.deepStrictEqual(files, ['README.md', 'docs/b.md']);
 });
+
+test('slugForPath flattens and sanitizes', () => {
+  assert.strictEqual(g.slugForPath('docs/adr/001 Auth.md'), 'docs-adr-001-auth');
+  assert.strictEqual(g.slugForPath('README.md'), 'readme');
+});
+
+test('mdDigest extracts title, headings, word count', () => {
+  const d = g.mdDigest('# Title\n\nSome words here.\n\n## Section A\ntext\n### Sub B\n');
+  assert.strictEqual(d.title, 'Title');
+  assert.deepStrictEqual(d.headings, ['## Section A', '### Sub B']);
+  assert.ok(d.wordCount > 3);
+});

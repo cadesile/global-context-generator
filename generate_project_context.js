@@ -576,7 +576,9 @@ function writeStage(root, contextDir, stageName, contract, outputs) {
   const written = [];
   for (const [file, content] of Object.entries(outputs)) {
     if (!content || !content.trim()) continue;
-    fs.writeFileSync(path.join(outDir, file), content.trimEnd() + '\n');
+    const outPath = path.join(outDir, file);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, content.trimEnd() + '\n');
     written.push(file);
   }
   const contractMd = [
@@ -584,11 +586,87 @@ function writeStage(root, contextDir, stageName, contract, outputs) {
     '## Inputs', ...contract.inputs.map((i) => `- ${i}`), '',
     '## Process', contract.process, '',
     '## Outputs',
-    ...contract.outputs.filter((o) => written.includes(o.file)).map((o) => `- output/${o.file} — ${o.desc}`),
+    ...contract.outputs.filter((o) => written.includes(o.file) || (o.file.endsWith('/') && written.some((w) => w.startsWith(o.file)))).map((o) => `- output/${o.file} — ${o.desc}`),
     ...(written.length === 0 ? ['- _No outputs produced (see Process notes)._'] : []),
   ].join('\n') + '\n';
   fs.writeFileSync(path.join(stageDir, 'CONTEXT.md'), contractMd);
   return written;
+}
+
+// ── Markdown digests + ledger (stage 05) ─────────────────────────────────────
+function slugForPath(rel) {
+  return rel.replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function mdDigest(content) {
+  const lines = content.split('\n');
+  const title = (lines.find((l) => /^# /.test(l)) || '').replace(/^# /, '');
+  const headings = lines.filter((l) => /^#{2,6} /.test(l));
+  const wordCount = content.split(/\s+/).filter(Boolean).length;
+  return { title, headings, wordCount };
+}
+
+function emptyManifest(repoName) {
+  return { version: 1, generated_at: '', generator_version: GENERATOR_VERSION, project: { name: repoName, stack: '' }, parsed_markdown: {}, stages: {} };
+}
+function loadManifest(root, contextDir, repoName) {
+  const m = readJson(path.join(root, contextDir, '_config', 'manifest.json'));
+  return (m && m.version === 1 && m.parsed_markdown) ? m : emptyManifest(repoName);
+}
+function saveManifest(root, contextDir, manifest) {
+  const p = path.join(root, contextDir, '_config', 'manifest.json');
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(manifest, null, 2) + '\n');
+}
+
+function runDocumentationStage(ctx, oldManifest, aiSummarize) {
+  const mdFiles = walkFiles(ctx.root, ctx.ignoreFn, { extensions: ['.md'] });
+  const parsedMarkdown = {};
+  const summaries = {};
+  const stats = { parsed: 0, skipped: 0, removed: 0 };
+  const now = new Date().toISOString();
+  const usedSlugs = new Set();
+
+  for (const rel of mdFiles) {
+    const content = readText(path.join(ctx.root, rel)) || '';
+    const hash = sha256(content);
+    let slug = slugForPath(rel);
+    while (usedSlugs.has(slug)) slug += '-2';
+    usedSlugs.add(slug);
+    const summaryRel = `stages/05_documentation/output/summaries/${slug}.md`;
+    const old = oldManifest.parsed_markdown[rel];
+    const oldSummaryContent = old && old.sha256 === hash ? readText(path.join(ctx.root, ctx.contextDir, old.summary)) : null;
+    const needsAiUpgrade = ctx.useAi && old && old.ai_summarized === false;
+    if (old && old.sha256 === hash && oldSummaryContent !== null && !needsAiUpgrade) {
+      stats.skipped++;
+      parsedMarkdown[rel] = { ...old, summary: summaryRel };
+      summaries[`${slug}.md`] = oldSummaryContent;
+      continue;
+    }
+    stats.parsed++;
+    const d = mdDigest(content);
+    const aiText = aiSummarize(rel, content);
+    const mtime = fs.statSync(path.join(ctx.root, rel)).mtime.toISOString();
+    summaries[`${slug}.md`] = [
+      `# ${rel}`, '',
+      `> Title: ${d.title || '(none)'} · ${d.wordCount} words · parsed ${now}`, '',
+      '## Outline', d.headings.length ? d.headings.map((h) => `- ${h.replace(/^#+ /, (m) => '  '.repeat(m.trim().length - 2))}`).join('\n') : '_No sub-headings._', '',
+      ...(aiText ? ['## Summary', aiText, ''] : []),
+    ].join('\n');
+    parsedMarkdown[rel] = { sha256: hash, mtime, summary: summaryRel, ai_summarized: Boolean(aiText), parsed_at: now };
+  }
+  stats.removed = Object.keys(oldManifest.parsed_markdown).filter((rel) => !parsedMarkdown[rel]).length;
+
+  let indexMd = '# Documentation Index\n';
+  let prevDir = null;
+  for (const rel of mdFiles) {
+    const dir = path.posix.dirname(rel);
+    if (dir !== prevDir) { indexMd += `\n**${dir === '.' ? '(root)' : dir + '/'}**\n`; prevDir = dir; }
+    const entry = parsedMarkdown[rel];
+    const slugFile = path.posix.basename(entry.summary);
+    indexMd += `- [${rel}](../../../../${rel}) — [digest](summaries/${slugFile})\n`;
+  }
+  return { indexMd, summaries, parsedMarkdown, stats };
 }
 
 function seedIgnoreFile(root, contextDir) {
@@ -726,14 +804,32 @@ async function main() {
     const written = writeStage(root, args.contextDir, stage.name, stage.contract, stage.outputs);
     stageIndex.push({ stage: stage.name, purpose: purposes[stage.name], files: written.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages', stage.name, 'output', f)).size })) });
   }
-  // Stage 05 + 06 land in Tasks 6–7; write placeholder contracts so the skeleton is complete:
-  writeStage(root, args.contextDir, '05_documentation', { inputs: ['source: **/*.md (ignore rules applied)'], process: 'Markdown documentation parsing (implemented in Task 6).', outputs: [] }, {});
+  const manifest = loadManifest(root, args.contextDir, repoName);
+  log.info('Stage 05_documentation...');
+  const docResult = runDocumentationStage(ctx, manifest, () => '');  // real AI summarizer injected in Task 7
+  const doc05Outputs = { 'index.md': docResult.indexMd };
+  for (const [f, c] of Object.entries(docResult.summaries)) doc05Outputs[`summaries/${f}`] = c;
+  const written05 = writeStage(root, args.contextDir, '05_documentation', {
+    inputs: ['source: **/*.md (ignore rules from _config/ignore applied)', 'reference: _config/manifest.json (parse ledger)'],
+    process: `Indexed ${Object.keys(docResult.parsedMarkdown).length} markdown files; parsed ${docResult.stats.parsed}, skipped ${docResult.stats.skipped} unchanged (ledger), removed ${docResult.stats.removed} stale.`,
+    outputs: [{ file: 'index.md', desc: 'all project markdown files, grouped by directory' }, { file: 'summaries/', desc: 'one digest per markdown file' }],
+  }, doc05Outputs);
+  log.info(`Docs: ${docResult.stats.parsed} parsed, ${docResult.stats.skipped} skipped (unchanged), ${docResult.stats.removed} removed`);
+  stageIndex.push({ stage: '05_documentation', purpose: 'Markdown docs index and digests', files: written05.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages/05_documentation/output', f)).size })) });
+
+  // Stage 06 lands in Task 7; write a placeholder contract so the skeleton is complete:
   writeStage(root, args.contextDir, '06_synthesis', { inputs: ['stage outputs 01–05'], process: 'AI synthesis (implemented in Task 7).', outputs: [] }, {});
-  stageIndex.push({ stage: '05_documentation', purpose: 'Markdown docs index and digests', files: [] });
   stageIndex.push({ stage: '06_synthesis', purpose: 'AI overview, architecture notes, focus', files: [] });
   writeRouter(root, args.contextDir, { repoName, label: stackLabel(detection, versions, devEnv, dbHints), stageIndex });
   log.success(`${args.contextDir}/ generated`);
   log.info('Tip: add "Read .context/CONTEXT.md first" to your CLAUDE.md / AGENTS.md.');
+
+  const finalManifest = emptyManifest(repoName);
+  finalManifest.generated_at = new Date().toISOString();
+  finalManifest.project.stack = stackLabel(detection, versions, devEnv, dbHints);
+  finalManifest.parsed_markdown = docResult.parsedMarkdown;
+  for (const s of stageIndex) finalManifest.stages[s.stage] = { last_run: finalManifest.generated_at };
+  saveManifest(root, args.contextDir, finalManifest);
 }
 
 module.exports = {
@@ -743,5 +839,6 @@ module.exports = {
   schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter,
+  slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
 };
 if (require.main === module) main();
