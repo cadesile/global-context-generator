@@ -41,15 +41,18 @@ const osx = require('node:os');
 
 test('ignore matcher: defaults, gitignore, custom file', () => {
   const tmp = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'icm-ign-'));
-  fsx.writeFileSync(pathx.join(tmp, '.gitignore'), '*.log\n/secret\n!keep.log\n# comment\n');
+  fsx.writeFileSync(pathx.join(tmp, '.gitignore'), '*.log\n/secret\n!keep.log\nbuilt/**\n# comment\n');
   fsx.mkdirSync(pathx.join(tmp, '.context/_config'), { recursive: true });
   fsx.writeFileSync(pathx.join(tmp, '.context/_config/ignore'), 'legacy-docs/\n');
   const ignored = g.createIgnoreMatcher({ root: tmp, contextDir: '.context' });
   assert.ok(ignored('node_modules/pkg/README.md'), 'default dir ignored at any depth');
   assert.ok(ignored('deep/node_modules/x.md'));
   assert.ok(ignored('app.log'), 'gitignore glob');
+  assert.ok(ignored('keep.log'), 'negation unsupported; *.log still matches');
   assert.ok(ignored('secret/notes.md'), 'root-anchored gitignore path');
   assert.ok(ignored('legacy-docs/old.md'), 'custom ignore file');
+  assert.ok(ignored('built'), 'dir/** matches bare directory');
+  assert.ok(ignored('built/js/app.md'), 'dir/** matches files under directory');
   assert.ok(ignored('.context/CONTEXT.md'), 'context dir always self-excluded');
   assert.ok(!ignored('docs/readme.md'));
   assert.ok(!ignored('src/index.ts'));

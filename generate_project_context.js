@@ -70,7 +70,7 @@ function extractBlocks(content, startRegex, { maxLines = 120 } = {}) {
 // ── Ignore engine ────────────────────────────────────────────────────────────
 // Supported syntax (v1): comments (#), blank lines, trailing-/ dir patterns,
 // leading-/ root anchors, * and ? globs, ** deep globs. Negation (!) is
-// unsupported and skipped (documented in README).
+// unsupported; skipped.
 const DEFAULT_IGNORES = [
   'node_modules', 'vendor', '.git', 'dist', 'build', 'out', 'coverage',
   '.next', '.nuxt', 'target', '__pycache__', '.venv', 'venv', 'tmp',
@@ -95,6 +95,7 @@ function compileIgnorePatterns(lines) {
     const line = raw.trim();
     if (!line || line.startsWith('#') || line.startsWith('!')) continue;
     let pat = line.replace(/\/+$/, '');
+    pat = pat.replace(/\/\*\*$/, '');
     const anchored = pat.startsWith('/');
     if (anchored) pat = pat.slice(1);
     const body = patternToRegex(pat);
