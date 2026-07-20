@@ -67,6 +67,73 @@ function extractBlocks(content, startRegex, { maxLines = 120 } = {}) {
   return out.join('\n\n').split('\n').slice(0, maxLines).join('\n');
 }
 
+// ── Ignore engine ────────────────────────────────────────────────────────────
+// Supported syntax (v1): comments (#), blank lines, trailing-/ dir patterns,
+// leading-/ root anchors, * and ? globs, ** deep globs. Negation (!) is
+// unsupported and skipped (documented in README).
+const DEFAULT_IGNORES = [
+  'node_modules', 'vendor', '.git', 'dist', 'build', 'out', 'coverage',
+  '.next', '.nuxt', 'target', '__pycache__', '.venv', 'venv', 'tmp',
+  '.cache', 'Pods', 'DerivedData', 'var',
+];
+
+function patternToRegex(pat) {
+  const esc = pat
+    .replace(/\*\*/g, '__GLOBSTAR__')
+    .replace(/\*/g, '__STAR__')
+    .replace(/\?/g, '__QUESTION__')
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/__GLOBSTAR__/g, '.*')
+    .replace(/__STAR__/g, '[^/]*')
+    .replace(/__QUESTION__/g, '[^/]');
+  return esc;
+}
+
+function compileIgnorePatterns(lines) {
+  const matchers = [];
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith('!')) continue;
+    let pat = line.replace(/\/+$/, '');
+    const anchored = pat.startsWith('/');
+    if (anchored) pat = pat.slice(1);
+    const body = patternToRegex(pat);
+    // Anchored or containing '/': match from root. Bare names: match any path segment.
+    const re = (anchored || pat.includes('/'))
+      ? new RegExp(`^${body}(/|$)`)
+      : new RegExp(`(^|/)${body}(/|$)`);
+    matchers.push(re);
+  }
+  return matchers;
+}
+
+function createIgnoreMatcher({ root, contextDir }) {
+  const lines = [...DEFAULT_IGNORES];
+  const gitignore = readText(path.join(root, '.gitignore'));
+  if (gitignore) lines.push(...gitignore.split('\n'));
+  const custom = readText(path.join(root, contextDir, '_config', 'ignore'));
+  if (custom) lines.push(...custom.split('\n'));
+  lines.push('/' + contextDir.replace(/\/+$/, ''));
+  const matchers = compileIgnorePatterns(lines);
+  return (relPath) => matchers.some((re) => re.test(relPath));
+}
+
+function walkFiles(root, ignoreFn, { extensions = null } = {}) {
+  const out = [];
+  (function recur(rel) {
+    const abs = rel ? path.join(root, rel) : root;
+    let entries;
+    try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (ignoreFn(childRel)) continue;
+      if (e.isDirectory()) recur(childRel);
+      else if (e.isFile() && (!extensions || extensions.includes(path.extname(e.name).toLowerCase()))) out.push(childRel);
+    }
+  })('');
+  return out.sort();
+}
+
 function main() {
   if (parseInt(process.versions.node, 10) < 18) { log.warn('Node >= 18 required.'); process.exit(1); }
   let args;
@@ -76,5 +143,5 @@ function main() {
   void args;
 }
 
-module.exports = { parseArgs, readText, readJson, sha256, exists, isDir, grepLines, extractBlocks, log, GENERATOR_VERSION };
+module.exports = { parseArgs, readText, readJson, sha256, exists, isDir, grepLines, extractBlocks, log, GENERATOR_VERSION, DEFAULT_IGNORES, compileIgnorePatterns, createIgnoreMatcher, walkFiles };
 if (require.main === module) main();
