@@ -149,3 +149,47 @@ test('buildExtractionRows produces one row per recorded extraction method', () =
   ];
   assert.deepStrictEqual(g.buildExtractionRows(stageIndex), ['| `03_data/schema.md` | static-regex-scan |']);
 });
+
+test('collectReviewContext prioritizes 03_data/04_interfaces content before earlier stages', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'review-ctx-'));
+  const write = (stage, file, content) => {
+    fs.mkdirSync(path.join(tmp, '.context/stages', stage, 'output'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '.context/stages', stage, 'output', file), content);
+  };
+  write('01_overview', 'stack.md', 'STACK CONTENT');
+  write('03_data', 'schema.md', 'SCHEMA CONTENT');
+  const stageIndex = [
+    { stage: '01_overview', files: [{ rel: 'output/stack.md' }] },
+    { stage: '03_data', files: [{ rel: 'output/schema.md' }] },
+  ];
+  const out = g.collectReviewContext(tmp, '.context', stageIndex, 1000);
+  assert.ok(out.includes('SCHEMA CONTENT') && out.includes('STACK CONTENT'));
+  assert.ok(out.indexOf('SCHEMA CONTENT') < out.indexOf('STACK CONTENT'), '03_data content must come before 01_overview content');
+});
+
+test('collectReviewContext truncates stage content to the budget but always appends extraction provenance', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'review-ctx-budget-'));
+  fs.mkdirSync(path.join(tmp, '.context/stages/03_data/output'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, '.context/stages/03_data/output/schema.md'), 'X'.repeat(500));
+  const stageIndex = [
+    { stage: '03_data', files: [{ rel: 'output/schema.md' }], extraction: { 'schema.md': 'static-regex-scan' } },
+  ];
+  const out = g.collectReviewContext(tmp, '.context', stageIndex, 100);
+  assert.ok(!out.includes('X'.repeat(500)), 'stage content must be truncated, not included in full, when it exceeds the budget');
+  assert.match(out, /Extraction provenance/);
+  assert.match(out, /schema\.md` \| static-regex-scan/);
+});
+
+test('collectReviewContext skips stages not present in stageIndex without throwing', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'review-ctx-empty-'));
+  assert.strictEqual(g.collectReviewContext(tmp, '.context', [], 1000), '');
+});

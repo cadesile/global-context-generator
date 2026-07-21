@@ -858,6 +858,33 @@ function callAi(aiCli, prompt) {
   }
 }
 
+// Priority order for the knowledge-gaps review input: domain/interface
+// stages first (schema, entities, routes, services — the densest source of
+// real business-logic gaps), then the rest, filling whatever budget remains.
+const REVIEW_STAGE_PRIORITY = ['03_data', '04_interfaces', '01_overview', '02_architecture', '05_documentation', '06_synthesis'];
+
+function collectReviewContext(root, contextDir, stageIndex, budget = 12000) {
+  const byStage = new Map(stageIndex.map((s) => [s.stage, s]));
+  let out = '';
+  for (const stageName of REVIEW_STAGE_PRIORITY) {
+    const entry = byStage.get(stageName);
+    if (!entry) continue;
+    for (const f of entry.files || []) {
+      if (out.length >= budget) break;
+      const abs = path.join(root, contextDir, 'stages', stageName, f.rel);
+      const content = readText(abs);
+      if (!content) continue;
+      const remaining = budget - out.length;
+      out += `### ${stageName}/${f.rel}\n${content.slice(0, remaining)}\n\n`;
+    }
+  }
+  const extractionRows = buildExtractionRows(stageIndex);
+  if (extractionRows.length) {
+    out += `### Extraction provenance\n\n| Output | Method |\n|---|---|\n${extractionRows.join('\n')}\n`;
+  }
+  return out;
+}
+
 // Port of bash lines 311–339: sample key project files into a char-budgeted block.
 function collectAiContextFiles(ctx) {
   let out = '';
@@ -1498,6 +1525,6 @@ module.exports = {
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
-  checkAiAvailable, callAi, stripModelPreamble, collectAiContextFiles, makeAiSummarizer,
+  checkAiAvailable, callAi, stripModelPreamble, collectAiContextFiles, collectReviewContext, makeAiSummarizer,
 };
 if (require.main === module) main();
