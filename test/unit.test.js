@@ -124,3 +124,28 @@ test('annotateWithDomainNotes annotates every heading found (present note or exp
   assert.match(out, /#### `Known`\n\n> \*\*Purpose:\*\* A known thing\./);
   assert.match(out, /#### `Unknown`\n\n> _No hand-written notes found/);
 });
+
+test('writeRouter adds a KNOWLEDGE_GAPS.md pointer only when hasKnowledgeGaps is true', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'router-'));
+  fs.mkdirSync(path.join(tmp, '.context'), { recursive: true });
+  const stageIndex = [{ stage: '01_overview', purpose: 'p', files: [] }];
+
+  g.writeRouter(tmp, '.context', { repoName: 'demo', label: 'node', stageIndex, hasKnowledgeGaps: true });
+  const withGaps = fs.readFileSync(path.join(tmp, '.context/CONTEXT.md'), 'utf8');
+  assert.match(withGaps, /Unresolved: see `KNOWLEDGE_GAPS\.md`/);
+
+  g.writeRouter(tmp, '.context', { repoName: 'demo', label: 'node', stageIndex, hasKnowledgeGaps: false });
+  const withoutGaps = fs.readFileSync(path.join(tmp, '.context/CONTEXT.md'), 'utf8');
+  assert.ok(!withoutGaps.includes('KNOWLEDGE_GAPS.md'));
+});
+
+test('buildExtractionRows produces one row per recorded extraction method', () => {
+  const stageIndex = [
+    { stage: '03_data', extraction: { 'schema.md': 'static-regex-scan' } },
+    { stage: '02_architecture' }, // no extraction field — must be skipped, not throw
+  ];
+  assert.deepStrictEqual(g.buildExtractionRows(stageIndex), ['| `03_data/schema.md` | static-regex-scan |']);
+});

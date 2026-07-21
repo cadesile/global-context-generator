@@ -1286,13 +1286,21 @@ function routesMethod(ctx, content) {
   return staticScanMethod(content);
 }
 
-function writeRouter(root, contextDir, { repoName, label, stageIndex }) {
+// Shared by writeRouter() and collectReviewContext() (Task 2) — one row per
+// stage output whose extraction method was recorded (see buildStages01to04()).
+function buildExtractionRows(stageIndex) {
+  return stageIndex
+    .filter((s) => s.extraction && Object.keys(s.extraction).length)
+    .flatMap((s) => Object.entries(s.extraction).map(([file, method]) => `| \`${s.stage}/${file}\` | ${method} |`));
+}
+
+function writeRouter(root, contextDir, { repoName, label, stageIndex, hasKnowledgeGaps }) {
   const rows = stageIndex.map(({ stage, purpose, files }) =>
     `| \`stages/${stage}/\` | ${purpose} | ${files.map((f) => `\`${f.rel}\` (${f.bytes}b)`).join(', ') || '—'} |`).join('\n');
-  const extractionRows = stageIndex
-    .filter((s) => s.extraction && Object.keys(s.extraction).length)
-    .flatMap((s) => Object.entries(s.extraction).map(([file, method]) => `| \`${s.stage}/${file}\` | ${method} |`))
-    .join('\n');
+  const extractionRows = buildExtractionRows(stageIndex).join('\n');
+  const gapsNote = hasKnowledgeGaps
+    ? "\nUnresolved: see `KNOWLEDGE_GAPS.md` for open questions this generation run couldn't answer from the code alone.\n"
+    : '';
   const md = `# ${repoName} — Project Context (.context)
 
 > Generated: ${new Date().toISOString()} · Stack: ${label} · Generator: v${GENERATOR_VERSION} (${GENERATOR_COMMIT})
@@ -1310,7 +1318,7 @@ contract (Inputs / Process / Outputs) and an output/ folder of focused markdown.
 5. Check the extraction provenance table below before trusting a section — some
    outputs come from a static best-effort scan rather than a live, resolved
    source, and that changes how much weight to give them.
-
+${gapsNote}
 Regenerate with: \`node generate_project_context.js\`. Ignore rules live in
 \`_config/ignore\`; the parse ledger and per-stage extraction provenance in
 \`_config/manifest.json\`.
@@ -1488,7 +1496,7 @@ module.exports = {
   schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock,
   extractDomainNotes, annotateWithDomainNotes,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
-  writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter,
+  writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
   checkAiAvailable, callAi, stripModelPreamble, collectAiContextFiles, makeAiSummarizer,
 };
