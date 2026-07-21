@@ -193,3 +193,22 @@ test('collectReviewContext skips stages not present in stageIndex without throwi
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'review-ctx-empty-'));
   assert.strictEqual(g.collectReviewContext(tmp, '.context', [], 1000), '');
 });
+
+test('dedupeGotchaHits drops hits whose field-name set is a subset of another hit, keeping the most complete one', () => {
+  const full = { names: ['a', 'b', 'c'], text: 'full sentence about a, b, and c' };
+  const partial1 = { names: ['a'], text: 'a note about just a' };
+  const partial2 = { names: ['b', 'c'], text: 'a differently-worded note about b and c' };
+  assert.deepStrictEqual(g.dedupeGotchaHits([full, partial1, partial2]), [full]);
+  // order independence: dedup must not depend on the "complete" hit coming first
+  assert.deepStrictEqual(g.dedupeGotchaHits([partial1, full, partial2]), [full]);
+});
+
+test('dedupeGotchaHits keeps genuinely independent hits (no subset relationship) and collapses exact duplicates', () => {
+  const aOnly = { names: ['a'], text: 'note about a' };
+  const bOnly = { names: ['b'], text: 'note about b' };
+  assert.deepStrictEqual(g.dedupeGotchaHits([aOnly, bOnly]), [aOnly, bOnly]);
+
+  const dup1 = { names: ['a'], text: 'note about a' };
+  const dup2 = { names: ['a'], text: 'note about a' };
+  assert.deepStrictEqual(g.dedupeGotchaHits([dup1, dup2]), [dup1]);
+});

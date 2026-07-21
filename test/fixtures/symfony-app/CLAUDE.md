@@ -8,7 +8,9 @@
 
 ## Key Gotchas
 
-- `hallOfFamePoints`: max(current, incoming) — never decreases.
+- `hallOfFamePoints` is `max(current, incoming)` — never decreases. `reputation` floors at 0. `totalCareerEarnings` adds deltas.
+- `hallOfFamePoints` is `max(current, incoming)` — never decreases.
+- `reputation` floors at 0. `totalCareerEarnings` accumulates deltas.
 
 ## Key Services
 

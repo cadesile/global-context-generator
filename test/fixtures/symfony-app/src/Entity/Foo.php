@@ -11,4 +11,10 @@ class Foo
 
     #[ORM\Column]
     private int $hallOfFamePoints;
+
+    #[ORM\Column]
+    private int $reputation;
+
+    #[ORM\Column]
+    private int $totalCareerEarnings;
 }

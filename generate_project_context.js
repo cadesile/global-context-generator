@@ -1042,6 +1042,27 @@ function extractDomainNotes(ctx) {
   return { ...notes, gotchas };
 }
 
+// A single CLAUDE.md "Key Gotchas" section can describe the same field
+// group at more than one granularity — e.g. one line covering three
+// fields, plus older/partial lines covering one or two of those same
+// fields — and each line independently matches an entity whose dump
+// contains all three fields. Keep only the hit whose field-name set isn't
+// a subset of another still-matched hit's set, so overlapping partial
+// notes collapse into the most complete one instead of stacking up.
+function namesAreSubset(a, b) {
+  const bSet = new Set(b);
+  return a.length > 0 && a.every((n) => bSet.has(n));
+}
+function dedupeGotchaHits(hits) {
+  return hits.filter((hit, i) => !hits.some((other, j) => {
+    if (i === j) return false;
+    if (!namesAreSubset(hit.names, other.names)) return false;
+    // Equal-sized (including exact-duplicate) name sets: keep only the first occurrence.
+    if (other.names.length === hit.names.length) return j < i;
+    return true;
+  }));
+}
+
 // Insert a note right after each `#### \`Name\`` heading the raw extractors
 // emit (see fileSection()), for *every* such heading — either the matching
 // domain note, or an explicit "none found" so absence reads as confirmed.
@@ -1060,7 +1081,7 @@ function annotateWithDomainNotes(md, notes, gotchas = []) {
     if (!currentName || !fenceBuf.length) return;
     const fenceText = fenceBuf.join('\n');
     const hits = gotchas.filter((g) => g.names.some((n) => new RegExp(`[$]?\\b${n}\\b`).test(fenceText)));
-    for (const hit of hits) out.push('', `> **Field note:** ${hit.text}`);
+    for (const hit of dedupeGotchaHits(hits)) out.push('', `> **Field note:** ${hit.text}`);
     fenceBuf = [];
   };
   for (const line of lines) {
@@ -1553,7 +1574,7 @@ module.exports = {
   detectDatabases, extractVersions, findCandidateSubDirs, collectStackContext, aiDetermineStack, determineAppStack,
   buildContextBlock, injectContextReference, updateAiInstructionFiles,
   schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock,
-  extractDomainNotes, annotateWithDomainNotes,
+  extractDomainNotes, annotateWithDomainNotes, dedupeGotchaHits,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,

@@ -265,7 +265,34 @@ test('domain notes from a hand-maintained CLAUDE.md (table format) are merged un
   // hallOfFamePoints' business rule lives in "Key Gotchas", disconnected from
   // the entity table — it must still land next to the specific field it
   // governs (inside Foo's dump), not just be dropped or bolted onto the class.
-  assert.match(entities, /private int \$hallOfFamePoints;\n```\n\n> \*\*Field note:\*\* `hallOfFamePoints`: max\(current, incoming\) — never decreases\./);
+  assert.match(entities, /private int \$totalCareerEarnings;\n```\n\n> \*\*Field note:\*\* `hallOfFamePoints` is `max\(current, incoming\)` — never decreases\. `reputation` floors at 0\. `totalCareerEarnings` adds deltas\./);
+});
+
+test('overlapping "Key Gotchas" lines collapse into one Field note per entity, not one per field-name match', () => {
+  // CLAUDE.md's Key Gotchas section (see test/fixtures/symfony-app/CLAUDE.md)
+  // deliberately has three lines about Foo's fields: one complete sentence
+  // covering hallOfFamePoints+reputation+totalCareerEarnings, plus two older/
+  // partial lines each covering a subset of those same fields. All three
+  // independently match Foo's dumped fields, so without dedup this would
+  // produce three overlapping Field note blocks (the regression this guards
+  // against) instead of the one complete one.
+  const root = copyFixture('symfony-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const entities = fs.readFileSync(path.join(root, '.context/stages/03_data/output/entities.md'), 'utf8');
+
+  for (const entitySection of entities.split(/(?=^#### )/m)) {
+    const nameMatch = entitySection.match(/^#### `([^`]+)`/);
+    if (!nameMatch) continue;
+    const notes = [...entitySection.matchAll(/^> \*\*Field note:\*\* (.+)$/gm)].map((m) => m[1]);
+    if (nameMatch[1] === 'Foo') assert.strictEqual(notes.length, 1, 'Foo must end up with exactly one Field note block, not one per overlapping gotcha line');
+    for (let i = 0; i < notes.length; i++) {
+      for (let j = 0; j < notes.length; j++) {
+        if (i === j) continue;
+        assert.ok(!notes[j].includes(notes[i]), `Field note ${i} ("${notes[i]}") on ${nameMatch[1]} is a subset/duplicate of note ${j} ("${notes[j]}") — overlapping notes must be deduped to the most complete one`);
+      }
+    }
+  }
 });
 
 test('the same CLAUDE.md merge covers 04_interfaces (services.md, controllers.md), not just 03_data', () => {
