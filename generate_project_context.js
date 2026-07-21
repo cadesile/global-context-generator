@@ -1500,7 +1500,32 @@ Based solely on the above, identify up to 5 areas of active development. For eac
     outputs: [{ file: 'overview.md', desc: 'AI project overview' }, { file: 'architecture-notes.md', desc: 'AI pattern analysis' }, { file: 'current-focus.md', desc: 'AI reading of recent commits' }],
   }, stage06Outputs);
   stageIndex.push({ stage: '06_synthesis', purpose: 'AI overview, architecture notes, focus', files: written06.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages/06_synthesis/output', f)).size })) });
-  writeRouter(root, args.contextDir, { repoName, label: stackLabel(detection, versions, devEnv, dbHints), stageIndex });
+
+  log.info('Reviewing .context for knowledge gaps...');
+  let hasKnowledgeGaps = false;
+  if (ai.useAi) {
+    const reviewContext = collectReviewContext(root, args.contextDir, stageIndex);
+    const gaps = callAi(args.aiCli, `You are reviewing a generated project-context folder for a ${detection.primaryFramework} (${detection.primaryLang}) codebase to find open questions a human should resolve — not to describe what's already documented.
+
+Generated context (schema, entities, routes, services, docs, synthesis — truncated, most relevant stages first):
+${reviewContext}
+
+Identify up to 8 knowledge gaps: business rules, edge cases, or intent that isn't derivable from the content above, or sections whose extraction method is a static fallback or unavailable (see the provenance table) and so unverified. Every gap must cite a specific file, class, or section from the content above. Do not invent generic gaps that could apply to any ${detection.primaryFramework} project. Return fewer than 8 if fewer are genuinely evidenced — do not pad.
+
+Format each gap exactly as:
+
+## <short topic>
+**Question:** <specific open question a human/agent needs to answer>
+**Why it matters:** <concrete consequence, tied to the cited file/class>
+
+Output only the gaps in that format — no preamble, no trailing commentary.`);
+    if (gaps) {
+      fs.writeFileSync(path.join(root, args.contextDir, 'KNOWLEDGE_GAPS.md'), `# Knowledge Gaps\n\n${gaps.trimEnd()}\n`);
+      hasKnowledgeGaps = true;
+    }
+  }
+
+  writeRouter(root, args.contextDir, { repoName, label: stackLabel(detection, versions, devEnv, dbHints), stageIndex, hasKnowledgeGaps });
   log.success(`${args.contextDir}/ generated`);
   const aiFileResults = updateAiInstructionFiles(root, args.contextDir);
   for (const { rel, result } of aiFileResults) {

@@ -294,6 +294,34 @@ test('router and manifest stamp generator commit and per-output extraction prove
   assert.match(manifest.stages['04_interfaces'].extraction['routes.md'], /static-regex-fallback/);
 });
 
+test('knowledge-gap review writes KNOWLEDGE_GAPS.md and a router pointer when AI is available', () => {
+  const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r.status, 0, r.stderr);
+
+  const gapsPath = path.join(root, '.context/KNOWLEDGE_GAPS.md');
+  assert.ok(fs.existsSync(gapsPath));
+  const gaps = fs.readFileSync(gapsPath, 'utf8');
+  assert.match(gaps, /^# Knowledge Gaps/);
+  assert.match(gaps, /## hallOfFamePoints refund handling/);
+  assert.match(gaps, /\*\*Question:\*\*/);
+  assert.match(gaps, /\*\*Why it matters:\*\*/);
+  assert.ok(!/no skill applies/i.test(gaps), 'leaked preamble must be stripped from KNOWLEDGE_GAPS.md too');
+
+  const router = fs.readFileSync(path.join(root, '.context/CONTEXT.md'), 'utf8');
+  assert.match(router, /Unresolved: see `KNOWLEDGE_GAPS\.md`/);
+});
+
+test('knowledge-gap review is skipped entirely under --no-ai: no file, no router pointer', () => {
+  const root = copyFixture('symfony-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(!fs.existsSync(path.join(root, '.context/KNOWLEDGE_GAPS.md')));
+  const router = fs.readFileSync(path.join(root, '.context/CONTEXT.md'), 'utf8');
+  assert.ok(!router.includes('KNOWLEDGE_GAPS.md'));
+});
+
 test('06_synthesis strips leaked model self-talk/routing preamble before writing output files', () => {
   const root = copyFixture('symfony-app');
   const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
