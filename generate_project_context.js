@@ -147,7 +147,7 @@ function walkFiles(root, ignoreFn, { extensions = null } = {}) {
 // ── Stack detection (port of bash detect_stack, lines 99–170) ────────────────
 function detectStack(root, dir = '.') {
   const d = {
-    stacks: { php: false, symfony: false, laravel: false, node: false, next: false, express: false,
+    stacks: { php: false, symfony: false, laravel: false, node: false, next: false, express: false, expo: false,
       python: false, django: false, fastapi: false, flask: false, go: false, rust: false, ruby: false, rails: false },
     primaryLang: 'unknown', primaryFramework: 'unknown', primaryExt: 'txt',
     sourceDir: 'src', modelsDir: '', controllersDir: '', servicesDir: '',
@@ -184,6 +184,12 @@ function detectStack(root, dir = '.') {
       } else if (deps.express) {
         d.stacks.express = true; d.primaryFramework = 'express';
         d.modelsDir = rel(dir, 'src/models'); d.controllersDir = rel(dir, 'src/controllers'); d.servicesDir = rel(dir, 'src/services');
+      } else if (deps.expo || deps['react-native']) {
+        // Client app, no server routing — hasServerFramework() already
+        // treats this the same as bare node, but "node" as the Framework
+        // label is unhelpfully generic once expo/expo-router/react-native
+        // are actually present in dependencies.
+        d.stacks.expo = true; d.primaryFramework = 'expo';
       }
       if (d.primaryFramework === 'unknown') d.primaryFramework = 'node';
     }
@@ -387,6 +393,7 @@ function extractVersions(root, appDir, detection) {
   if (pkg) {
     out.nodeVersion = clean(pkg.engines?.node);
     if (detection.primaryFramework === 'nextjs') out.frameworkVersion = clean(pkg.dependencies?.next);
+    if (detection.primaryFramework === 'expo') out.frameworkVersion = clean(pkg.dependencies?.expo);
   }
   return out;
 }

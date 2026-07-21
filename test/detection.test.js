@@ -9,9 +9,32 @@ test('detects expo/node stack', () => {
   const root = copyFixture('expo-app');
   const d = g.detectStack(root);
   assert.strictEqual(d.stacks.node, true);
+  assert.strictEqual(d.stacks.expo, true);
   assert.strictEqual(d.primaryLang, 'node');
+  assert.strictEqual(d.primaryFramework, 'expo', 'a real expo dependency must surface a specific "expo" framework, not a bare "node" fallback');
   assert.strictEqual(d.primaryExt, 'ts');
   assert.strictEqual(d.sourceDir, 'src');
+  assert.strictEqual(g.hasServerFramework(d), false, 'expo is a client stack with no server routing');
+  const v = g.extractVersions(root, '.', d);
+  assert.match(v.frameworkVersion, /^51/, 'frameworkVersion should come from the expo dependency version');
+});
+
+test('bare node with no expo/react-native/next/express dependency still falls back to "node"', () => {
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'icm-bare-node-'));
+  fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ dependencies: { lodash: '^4.0.0' } }));
+  const d = g.detectStack(tmp);
+  assert.strictEqual(d.stacks.expo, false);
+  assert.strictEqual(d.primaryFramework, 'node');
+});
+
+test('detects react-native (without the expo package itself) as the expo/RN framework', () => {
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'icm-rn-'));
+  fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ dependencies: { 'react-native': '^0.74.0' } }));
+  const d = g.detectStack(tmp);
+  assert.strictEqual(d.stacks.expo, true);
+  assert.strictEqual(d.primaryFramework, 'expo');
 });
 
 test('detects laravel stack with dirs', () => {

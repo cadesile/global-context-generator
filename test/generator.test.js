@@ -19,7 +19,8 @@ test('full run creates ICM skeleton with contracts (expo, no-ai)', () => {
   assert.match(contract, /## Inputs/);
   assert.match(contract, /## Process/);
   assert.match(contract, /## Outputs/);
-  assert.match(fs.readFileSync(path.join(ctx, 'stages/01_overview/output/stack.md'), 'utf8'), /expo/i);
+  assert.match(fs.readFileSync(path.join(ctx, 'stages/01_overview/output/stack.md'), 'utf8'), /\*\*Framework\*\* \| expo/,
+    'Framework label must be the specific "expo" framework, not a bare "node" fallback');
   assert.match(fs.readFileSync(path.join(ctx, 'stages/03_data/output/schema.md'), 'utf8'), /CREATE TABLE users/);
   assert.match(fs.readFileSync(path.join(ctx, 'stages/03_data/output/state.md'), 'utf8'), /TaskStore/);
   const router = fs.readFileSync(path.join(ctx, 'CONTEXT.md'), 'utf8');
