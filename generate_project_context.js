@@ -667,6 +667,78 @@ function findOpenApiFile(ctx) {
   }
   return '';
 }
+// ── AI instruction file updater ───────────────────────────────────────────────
+const CONTEXT_SENTINEL_START = '<!-- context-generator: start -->';
+const CONTEXT_SENTINEL_END = '<!-- context-generator: end -->';
+// Known AI agent instruction files, checked in priority order.
+const AI_INSTRUCTION_FILES = ['CLAUDE.md', '.claude/CLAUDE.md', 'AGENTS.md', 'GEMINI.md'];
+
+function buildContextBlock(contextDir) {
+  return [
+    CONTEXT_SENTINEL_START,
+    '## Project Context',
+    '',
+    `This project has a structured \`${contextDir}/\` folder for AI agent context (ICM format).`,
+    `**Read \`${contextDir}/CONTEXT.md\` first** — it is the stage router that tells you which output`,
+    'files are relevant to your task. Do not load the entire folder; use the router to scope what you read.',
+    '',
+    `Regenerate with: \`node generate_project_context.js\``,
+    CONTEXT_SENTINEL_END,
+  ].join('\n');
+}
+
+function injectContextReference(filePath, contextDir) {
+  const block = buildContextBlock(contextDir);
+  const existing = readText(filePath);
+
+  if (existing === null) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, block + '\n');
+    return 'created';
+  }
+
+  // Replace existing sentinel block in-place
+  if (existing.includes(CONTEXT_SENTINEL_START)) {
+    const updated = existing.replace(
+      new RegExp(`${CONTEXT_SENTINEL_START}[\\s\\S]*?${CONTEXT_SENTINEL_END}`),
+      block,
+    );
+    if (updated === existing) return 'unchanged';
+    fs.writeFileSync(filePath, updated);
+    return 'updated';
+  }
+
+  // Insert after the first H1 heading (and any blank lines that follow it),
+  // or prepend to the file if there is no H1.
+  const lines = existing.split('\n');
+  const h1Idx = lines.findIndex((l) => /^# /.test(l));
+  let insertAt = 0;
+  if (h1Idx !== -1) {
+    insertAt = h1Idx + 1;
+    while (insertAt < lines.length && lines[insertAt].trim() === '') insertAt++;
+  }
+  lines.splice(insertAt, 0, '', block, '');
+  fs.writeFileSync(filePath, lines.join('\n'));
+  return 'injected';
+}
+
+function updateAiInstructionFiles(root, contextDir) {
+  const results = [];
+  for (const rel of AI_INSTRUCTION_FILES) {
+    const abs = path.join(root, rel);
+    if (!exists(abs)) continue;
+    const result = injectContextReference(abs, contextDir);
+    results.push({ rel, result });
+  }
+  // No AI instruction file found — create CLAUDE.md so agents always have the pointer
+  if (results.length === 0) {
+    const abs = path.join(root, 'CLAUDE.md');
+    const result = injectContextReference(abs, contextDir);
+    results.push({ rel: 'CLAUDE.md', result });
+  }
+  return results;
+}
+
 // ── AI integration (port of bash lines 58–69, 71–84, 311–339, 368–437) ──────
 function checkAiAvailable(args) {
   if (!args.useAi) return { useAi: false, reason: '--no-ai' };
@@ -1127,7 +1199,10 @@ Based solely on the above, identify 3-5 areas of active development that would b
   stageIndex.push({ stage: '06_synthesis', purpose: 'AI overview, architecture notes, focus', files: written06.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages/06_synthesis/output', f)).size })) });
   writeRouter(root, args.contextDir, { repoName, label: stackLabel(detection, versions, devEnv, dbHints), stageIndex });
   log.success(`${args.contextDir}/ generated`);
-  log.info('Tip: add "Read .context/CONTEXT.md first" to your CLAUDE.md / AGENTS.md.');
+  const aiFileResults = updateAiInstructionFiles(root, args.contextDir);
+  for (const { rel, result } of aiFileResults) {
+    if (result !== 'unchanged') log.success(`${result}: ${rel} → context pointer`);
+  }
 
   const finalManifest = emptyManifest(repoName);
   finalManifest.generated_at = new Date().toISOString();
@@ -1141,6 +1216,7 @@ module.exports = {
   parseArgs, readText, readJson, sha256, exists, isDir, grepLines, extractBlocks, log, GENERATOR_VERSION,
   DEFAULT_IGNORES, compileIgnorePatterns, createIgnoreMatcher, walkFiles, detectStack, detectDevEnv,
   detectDatabases, extractVersions, findCandidateSubDirs, collectStackContext, aiDetermineStack, determineAppStack,
+  buildContextBlock, injectContextReference, updateAiInstructionFiles,
   schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter,
