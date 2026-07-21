@@ -9,6 +9,14 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const GENERATOR_VERSION = '2.0.0';
+// Commit hash of the generator script itself (not the target project) —
+// lets a consuming agent tell exactly which version of the generator's
+// extraction logic produced a given .context/ folder.
+function generatorCommit() {
+  const r = spawnSync('git', ['-C', __dirname, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : 'unknown';
+}
+const GENERATOR_COMMIT = generatorCommit();
 
 // ── Logging ──────────────────────────────────────────────────────────────────
 const log = {
@@ -392,6 +400,18 @@ function filesUnder(ctx, relDir, ext) {
 function codeFence(lang, body) { return body.trim() ? '```' + lang + '\n' + body.trim() + '\n```\n' : ''; }
 function fileSection(title, lang, body) { return body.trim() ? `#### \`${title}\`\n${codeFence(lang, body)}\n` : ''; }
 
+// Select the N most recent files by filename, not by full relative path.
+// Migration filenames encode a sortable timestamp/sequence (e.g. Doctrine's
+// VersionYYYYMMDDHHMMSS, Laravel's YYYY_MM_DD_HHMMSS_name); the directory
+// they live in does not. Sorting by full path (as walkFiles/filesUnder do,
+// for stable tree-order output elsewhere) means an archived/legacy
+// subdirectory whose name sorts after the siblings (e.g. "archive/",
+// "old/") pushes stale files to the end of the list, displacing genuinely
+// recent ones. Sorting by basename avoids that.
+function latestByBasename(files, n) {
+  return [...files].sort((a, b) => path.basename(a).localeCompare(path.basename(b))).slice(-n);
+}
+
 // ── Schema scanners (bash lines 496–615) ─────────────────────────────────────
 function _schemaSqlite(ctx) {
   const files = walkFiles(ctx.root, ctx.ignoreFn, { extensions: ['.sql'] })
@@ -407,7 +427,7 @@ function _schemaSqlite(ctx) {
 }
 function _schemaDoctrine(ctx) {
   let out = '';
-  const migs = filesUnder(ctx, path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, 'migrations'), '.php').slice(-10);
+  const migs = latestByBasename(filesUnder(ctx, path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, 'migrations'), '.php'), 10);
   if (migs.length) {
     out += '**Migrations (latest 10):**\n\n';
     for (const f of migs) {
@@ -428,7 +448,7 @@ function _schemaDoctrine(ctx) {
 }
 function _schemaLaravel(ctx) {
   let out = '';
-  const migs = filesUnder(ctx, path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, 'database/migrations'), '.php').slice(-10);
+  const migs = latestByBasename(filesUnder(ctx, path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, 'database/migrations'), '.php'), 10);
   if (migs.length) {
     out += '**Migrations (latest 10):**\n\n';
     for (const f of migs) {
@@ -544,11 +564,54 @@ function modelsBlock(ctx) { return signatureScan(ctx, 'modelsDir', 'models', 15)
 function controllersBlock(ctx) { return signatureScan(ctx, 'controllersDir', 'controllers', 20); }
 function servicesBlock(ctx) { return signatureScan(ctx, 'servicesDir', 'services', 12); }
 
-// ── Routes (bash lines 457–471; static-only port — no lando/artisan exec) ────
+// ── Routes (bash lines 457–471) ──────────────────────────────────────────────
+// Symfony/Laravel routes are best extracted live (`bin/console debug:router`,
+// `php artisan route:list`) since that reflects the resolved route table
+// exactly. But that requires a booted app/container, which isn't available
+// at generation time in CI or when the dev container isn't running. Rather
+// than degrade to a "go run this yourself" placeholder — useless to an agent
+// that can't necessarily start the container — fall back to a static regex
+// scan over controller/route-definition files so routes.md always has
+// *something* extracted.
+function _routesSymfonyStatic(ctx) {
+  const files = filesUnder(ctx, ctx.detection.controllersDir, '.php');
+  const rows = [];
+  for (const f of files) {
+    const content = readText(path.join(ctx.root, f)) || '';
+    const classMatch = content.match(/#\[Route\(([^)]*)\)\]\s*\n(?:\s*#\[[^\]]*\]\s*\n)*\s*(?:final\s+|abstract\s+)*class\s+(\w+)/);
+    const classAttrs = classMatch ? classMatch[1] : '';
+    const classPath = (classAttrs.match(/^\s*['"]([^'"]*)['"]/) || classAttrs.match(/path:\s*['"]([^'"]*)['"]/) || [])[1] || '';
+    const re = /#\[Route\(([^)]*)\)\]\s*\n(?:\s*#\[[^\]]*\]\s*\n)*\s*public function (\w+)/g;
+    let m;
+    while ((m = re.exec(content))) {
+      const attrs = m[1];
+      const routePath = (attrs.match(/^\s*['"]([^'"]*)['"]/) || attrs.match(/path:\s*['"]([^'"]*)['"]/) || [])[1] || '';
+      const methods = ((attrs.match(/methods:\s*\[([^\]]*)\]/) || [])[1] || '').replace(/['"]/g, '').trim() || 'ANY';
+      rows.push({ methods, path: (classPath + routePath) || '/', target: `${path.basename(f, '.php')}::${m[2]}` });
+    }
+  }
+  if (!rows.length) return '';
+  return '_Extracted via static scan of `#[Route(...)]` attributes — run `bin/console debug:router` for the live, resolved route table._\n\n'
+    + '| Method | Path | Controller#action |\n|---|---|---|\n'
+    + rows.map((r) => `| ${r.methods} | \`${r.path}\` | \`${r.target}\` |`).join('\n') + '\n';
+}
+function _routesLaravelStatic(ctx) {
+  const routesDir = path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, 'routes');
+  const files = filesUnder(ctx, routesDir, '.php');
+  const lines = files.flatMap((f) => grepLines(readText(path.join(ctx.root, f)) || '',
+    /Route::(get|post|put|delete|patch|match|resource|apiResource|group)\(/, 200));
+  if (!lines.length) return '';
+  return '_Extracted via static scan of `Route::` calls in `routes/` — run `php artisan route:list` for the live, resolved route table._\n\n'
+    + codeFence('php', lines.slice(0, 60).join('\n'));
+}
 function routesBlock(ctx) {
   const d = ctx.detection;
-  if (d.primaryFramework === 'symfony') return 'Run: `bin/console debug:router` for the live route table.\n';
-  if (d.primaryFramework === 'laravel') return 'Run: `php artisan route:list` for the live route table.\n';
+  if (d.primaryFramework === 'symfony') {
+    return _routesSymfonyStatic(ctx) || 'No `#[Route(...)]` attributes found via static scan (and `bin/console debug:router` was not run).\n';
+  }
+  if (d.primaryFramework === 'laravel') {
+    return _routesLaravelStatic(ctx) || 'No `Route::` definitions found via static scan of `routes/` (and `php artisan route:list` was not run).\n';
+  }
   if (d.stacks.express || d.stacks.next || d.stacks.node) {
     const lines = filesUnder(ctx, d.controllersDir || d.sourceDir, '.ts')
       .concat(filesUnder(ctx, d.controllersDir || d.sourceDir, '.js'))
@@ -571,7 +634,7 @@ function migrationsBlock(ctx) {
   const files = filesUnder(ctx, path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, mdir), '.' + ctx.detection.primaryExt);
   if (!files.length) return '_No migrations directory found._\n';
   let out = '| Migration | Date |\n|---|---|\n';
-  for (const f of files.slice(-10)) {
+  for (const f of latestByBasename(files, 10)) {
     const name = path.basename(f, '.' + ctx.detection.primaryExt);
     out += `| \`${name}\` | ${(name.match(/\d{8}/) || ['—'])[0]} |\n`;
   }
@@ -752,6 +815,34 @@ function checkAiAvailable(args) {
   return { useAi: true, reason: `${args.aiCli} CLI detected — AI summaries enabled.` };
 }
 
+// Every AI-generated stage goes through callAi(), and none of them asked the
+// model to emit anything but the requested output shape — so a line of
+// self-referential/routing scratch talk ("This is a plain content-generation
+// task ... no skill applies here.") leaking in front of the real content is a
+// systemic risk at this one chokepoint, not a one-off prompt hiccup. Strip it
+// here so every call site (overview, architecture notes, focus, stack
+// determination, OpenAPI summary, per-doc summaries) is covered uniformly,
+// rather than patching each prompt individually.
+const MODEL_PREAMBLE_RES = [
+  /^this is (?:a|an|not)\b[^.!?\n]*\b(?:task|skill)\b[^.!?\n]*[.!?]+\s*/i,
+  /^no skill applies[^.!?\n]*[.!?]+\s*/i,
+  /^(?:i(?:'ll| will| am going to| need to)|let me)\b[^.!?\n]*[.!?]+\s*/i,
+  /^as an ai\b[^.!?\n]*[.!?]+\s*/i,
+];
+function stripModelPreamble(text) {
+  if (!text) return text;
+  let out = text;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const re of MODEL_PREAMBLE_RES) {
+      const m = out.match(re);
+      if (m) { out = out.slice(m[0].length); changed = true; }
+    }
+  }
+  return out.replace(/^\s+/, '');
+}
+
 function callAi(aiCli, prompt) {
   try {
     const r = spawnSync(aiCli, ['-p', prompt], { encoding: 'utf8', timeout: 120000 });
@@ -760,7 +851,7 @@ function callAi(aiCli, prompt) {
       log.warn(`${aiCli} returned empty for: ${prompt.slice(0, 60)}...`);
       return '';
     }
-    return out;
+    return stripModelPreamble(out);
   } catch (e) {
     log.warn(`${aiCli} failed: ${e.message}`);
     return '';
@@ -834,6 +925,141 @@ function _sourceDirList(ctx) {
   return dirs.sort().slice(0, 30).join('\n');
 }
 
+// ── Domain notes: merge hand-written docs into raw extraction (03/04) ───────
+// Static extraction gives field lists and method signatures but nothing about
+// *why* they exist — a business rule like "hallOfFamePoints never decreases,
+// uses max(current, incoming)" isn't derivable from the field's declaration.
+// If the repo has a hand-maintained CLAUDE.md/AGENTS.md/README with a "Key
+// Entities" / "Key Services" / "Key Controllers" section (common in real
+// projects — usually as a markdown table, sometimes a bullet list) and/or a
+// "Key Gotchas" section with per-field business rules, parse both and attach
+// them next to the matching dumped entity/service/field instead of leaving
+// 03/04 mute about intent. Parsed directly and deterministically (not via the
+// AI summarizer) so it works even with --no-ai and doesn't depend on stage
+// 05's AI step having run first.
+//
+// This runs uniformly, not best-effort: every name the static extractors
+// dump gets checked against the parsed notes and gets *some* line — either
+// the note found, or an explicit "no hand-written notes found" — so an agent
+// can tell a confirmed absence from an artifact of a partial merge pass.
+const DOMAIN_NOTE_HEADING_RE = /^key (entities|models|services|controllers)\b/i;
+const DOMAIN_GOTCHA_HEADING_RE = /^key (gotchas|notes|business rules)\b/i;
+const DOMAIN_NOTE_BULLET_RE = /^[-*]\s*(?:`([^`]+)`|\*\*([^*]+)\*\*|([A-Z]\w*))\s*[:—-]\s*(.+)$/;
+const DOMAIN_NOTE_TABLE_SEP_RE = /^\|?[\s:|-]+\|?$/;
+
+// Parse a buffered run of consecutive `| ... |` table lines into {name, desc}
+// pairs, skipping the header row (the row immediately before the `|---|---|`
+// separator) when a separator is present.
+function parseDomainNoteTable(lines) {
+  const sepIdx = lines.findIndex((l) => DOMAIN_NOTE_TABLE_SEP_RE.test(l.trim()) && l.includes('-'));
+  const dataLines = sepIdx === -1 ? lines : lines.slice(sepIdx + 1);
+  const out = [];
+  for (const line of dataLines) {
+    const cells = line.split('|').map((c) => c.trim()).filter((c) => c !== '');
+    if (cells.length < 2) continue;
+    const name = cells[0].replace(/`/g, '').trim();
+    const desc = cells[cells.length - 1].trim();
+    if (/^[A-Za-z_]\w*$/.test(name) && desc) out.push({ name, desc });
+  }
+  return out;
+}
+
+function extractDomainNotes(ctx) {
+  const notes = { entities: {}, services: {} };
+  const gotchas = []; // { names: string[], text }
+  for (const rel of [...AI_INSTRUCTION_FILES, 'README.md']) {
+    const content = readText(path.join(ctx.root, rel));
+    if (!content) continue;
+    let section = null; // 'entities' | 'services' | 'gotchas' | null
+    let tableBuf = [];
+    const flushTable = () => {
+      if (!tableBuf.length || section === 'gotchas' || !section) { tableBuf = []; return; }
+      for (const { name, desc } of parseDomainNoteTable(tableBuf)) {
+        if (!notes[section][name]) notes[section][name] = desc;
+      }
+      tableBuf = [];
+    };
+    for (const line of content.split('\n')) {
+      const isTableRow = /^\s*\|.*\|\s*$/.test(line);
+      if (!isTableRow) flushTable();
+
+      const h = line.match(/^(#{1,6})\s*(.+)$/);
+      if (h) {
+        const title = h[2].toLowerCase();
+        const kind = (title.match(DOMAIN_NOTE_HEADING_RE) || [])[1];
+        if (kind) { section = (kind === 'services' || kind === 'controllers') ? 'services' : 'entities'; }
+        else if (DOMAIN_GOTCHA_HEADING_RE.test(title)) { section = 'gotchas'; }
+        else { section = null; } // any other heading ends whatever section we were in — avoids
+                                  // mis-attributing content across sections based on heading depth
+        continue;
+      }
+      if (!section) continue;
+
+      if (isTableRow) { tableBuf.push(line); continue; }
+
+      if (section === 'gotchas') {
+        const names = [...line.matchAll(/`([A-Za-z_]\w*)`/g)].map((m) => m[1]);
+        const text = line.replace(/^[-*]\s*/, '').trim();
+        if (names.length && text) gotchas.push({ names, text });
+        continue;
+      }
+
+      const m = line.match(DOMAIN_NOTE_BULLET_RE);
+      if (!m) continue;
+      const name = m[1] || m[2] || m[3];
+      const desc = m[4].trim();
+      if (name && desc && !notes[section][name]) notes[section][name] = desc;
+    }
+    flushTable();
+  }
+  return { ...notes, gotchas };
+}
+
+// Insert a note right after each `#### \`Name\`` heading the raw extractors
+// emit (see fileSection()), for *every* such heading — either the matching
+// domain note, or an explicit "none found" so absence reads as confirmed.
+// Also scans each entity's dumped field/property lines for gotchas whose
+// name matches a field declared in that same block, and attaches those
+// immediately after the code fence — closer to the specific field they
+// govern, not just the class as a whole.
+function annotateWithDomainNotes(md, notes, gotchas = []) {
+  if (!md) return md;
+  const lines = md.split('\n');
+  const out = [];
+  let currentName = null;
+  let inFence = false;
+  let fenceBuf = [];
+  const flushFence = () => {
+    if (!currentName || !fenceBuf.length) return;
+    const fenceText = fenceBuf.join('\n');
+    const hits = gotchas.filter((g) => g.names.some((n) => new RegExp(`[$]?\\b${n}\\b`).test(fenceText)));
+    for (const hit of hits) out.push('', `> **Field note:** ${hit.text}`);
+    fenceBuf = [];
+  };
+  for (const line of lines) {
+    const headingMatch = line.match(/^#### `([^`]+)`$/);
+    if (headingMatch) {
+      flushFence();
+      currentName = headingMatch[1];
+      out.push(line, '');
+      out.push(notes && notes[currentName]
+        ? `> **Purpose:** ${notes[currentName]}`
+        : '> _No hand-written notes found in CLAUDE.md/AGENTS.md/README.md for this name._');
+      continue;
+    }
+    if (/^```/.test(line.trim())) {
+      inFence = !inFence;
+      out.push(line);
+      if (!inFence) flushFence();
+      continue;
+    }
+    if (inFence) fenceBuf.push(line);
+    out.push(line);
+  }
+  flushFence();
+  return out.join('\n');
+}
+
 function sectionLabels(detection, dbHints) {
   const s = detection.stacks; const db = dbHints || 'SQL';
   if (s.symfony) return { schema: `Database Schema (Doctrine / ${db})`, entities: 'Doctrine Entity Definitions', state: '' };
@@ -885,7 +1111,7 @@ function mdDigest(content) {
 }
 
 function emptyManifest(repoName) {
-  return { version: 1, generated_at: '', generator_version: GENERATOR_VERSION, project: { name: repoName, stack: '' }, parsed_markdown: {}, stages: {} };
+  return { version: 1, generated_at: '', generator_version: GENERATOR_VERSION, generator_commit: GENERATOR_COMMIT, project: { name: repoName, stack: '' }, parsed_markdown: {}, stages: {} };
 }
 function loadManifest(root, contextDir, repoName) {
   const m = readJson(path.join(root, contextDir, '_config', 'manifest.json'));
@@ -984,6 +1210,7 @@ function devSetupBlock(ctx) {
 function buildStages01to04(ctx) {
   const labels = sectionLabels(ctx.detection, ctx.dbHints);
   const label = stackLabel(ctx.detection, ctx.versions, ctx.devEnv, ctx.dbHints);
+  const domainNotes = extractDomainNotes(ctx);
   const openApiFile = findOpenApiFile(ctx);
   const openApiRaw = ctx.aiOpenApi
     ? ctx.aiOpenApi
@@ -1003,35 +1230,72 @@ function buildStages01to04(ctx) {
         process: 'Captured the directory structure and recent git activity.',
         outputs: [{ file: 'structure.md', desc: 'directory tree' }, { file: 'git-activity.md', desc: 'recent commits and changed files' }] },
       outputs: { 'structure.md': `# Project Structure\n\n${treeBlock(ctx)}`, 'git-activity.md': `# Recent Git Activity\n\n${gitActivityBlock(ctx)}` } },
-    { name: '03_data',
-      contract: { inputs: [`source: ${ctx.detection.modelsDir || 'model files'}`, 'source: migrations / schema files'],
-        process: `Extracted the data layer for ${ctx.detection.primaryFramework}: schema, entity definitions${labels.state ? ', store shapes' : ''}, and migrations.`,
-        outputs: [{ file: 'schema.md', desc: labels.schema }, { file: 'entities.md', desc: labels.entities }, { file: 'state.md', desc: labels.state || 'store shapes' }, { file: 'migrations.md', desc: 'latest migrations' }] },
-      outputs: {
-        'schema.md': `# ${labels.schema}\n\n${schemaBlock(ctx)}`,
-        'entities.md': `# ${labels.entities}\n\n${entitiesBlock(ctx)}`,
-        'state.md': labels.state ? `# ${labels.state}\n\n${stateBlock(ctx)}` : '',
-        'migrations.md': `# Migrations\n\n${migrationsBlock(ctx)}`,
-      } },
-    { name: '04_interfaces',
-      contract: { inputs: [`source: ${ctx.detection.controllersDir || 'controller files'}`, `source: ${ctx.detection.servicesDir || 'service files'}`, openApiFile ? `source: ${openApiFile}` : 'source: (no OpenAPI spec found)'],
-        process: 'Extracted API routes, controller and service signatures, and the OpenAPI spec if present.',
-        outputs: [{ file: 'routes.md', desc: 'API routes' }, { file: 'controllers.md', desc: 'controller signatures' }, { file: 'services.md', desc: 'service signatures' }, { file: 'api-spec.md', desc: 'OpenAPI/Swagger spec' }] },
-      outputs: {
-        'routes.md': routesBlock(ctx) ? `# API Routes\n\n${routesBlock(ctx)}` : '',
-        'controllers.md': controllersBlock(ctx) ? `# Controllers\n\n${controllersBlock(ctx)}` : '',
-        'services.md': servicesBlock(ctx) ? `# Services\n\n${servicesBlock(ctx)}` : '',
-        'api-spec.md': openApiRaw ? `# API Specification\n\n${openApiRaw}` : '',
-      } },
+    (() => {
+      const schemaContent = schemaBlock(ctx);
+      const entitiesContent = entitiesBlock(ctx);
+      const migrationsContent = migrationsBlock(ctx);
+      return { name: '03_data',
+        contract: { inputs: [`source: ${ctx.detection.modelsDir || 'model files'}`, 'source: migrations / schema files'],
+          process: `Extracted the data layer for ${ctx.detection.primaryFramework}: schema, entity definitions${labels.state ? ', store shapes' : ''}, and migrations.`,
+          outputs: [{ file: 'schema.md', desc: labels.schema }, { file: 'entities.md', desc: labels.entities }, { file: 'state.md', desc: labels.state || 'store shapes' }, { file: 'migrations.md', desc: 'latest migrations' }] },
+        outputs: {
+          'schema.md': `# ${labels.schema}\n\n${schemaContent}`,
+          'entities.md': `# ${labels.entities}\n\n${annotateWithDomainNotes(entitiesContent, domainNotes.entities, domainNotes.gotchas)}`,
+          'state.md': labels.state ? `# ${labels.state}\n\n${stateBlock(ctx)}` : '',
+          'migrations.md': `# Migrations\n\n${migrationsContent}`,
+        },
+        extraction: {
+          'schema.md': staticScanMethod(schemaContent),
+          'entities.md': staticScanMethod(entitiesContent),
+          'migrations.md': staticScanMethod(migrationsContent),
+        } };
+    })(),
+    (() => {
+      const routesContent = routesBlock(ctx);
+      const controllersContent = controllersBlock(ctx);
+      const servicesContent = servicesBlock(ctx);
+      return { name: '04_interfaces',
+        contract: { inputs: [`source: ${ctx.detection.controllersDir || 'controller files'}`, `source: ${ctx.detection.servicesDir || 'service files'}`, openApiFile ? `source: ${openApiFile}` : 'source: (no OpenAPI spec found)'],
+          process: 'Extracted API routes, controller and service signatures, and the OpenAPI spec if present.',
+          outputs: [{ file: 'routes.md', desc: 'API routes' }, { file: 'controllers.md', desc: 'controller signatures' }, { file: 'services.md', desc: 'service signatures' }, { file: 'api-spec.md', desc: 'OpenAPI/Swagger spec' }] },
+        outputs: {
+          'routes.md': routesContent ? `# API Routes\n\n${routesContent}` : '',
+          'controllers.md': controllersContent ? `# Controllers\n\n${annotateWithDomainNotes(controllersContent, domainNotes.services)}` : '',
+          'services.md': servicesContent ? `# Services\n\n${annotateWithDomainNotes(servicesContent, domainNotes.services)}` : '',
+          'api-spec.md': openApiRaw ? `# API Specification\n\n${openApiRaw}` : '',
+        },
+        extraction: {
+          'routes.md': routesMethod(ctx, routesContent),
+          'controllers.md': staticScanMethod(controllersContent),
+          'services.md': staticScanMethod(servicesContent),
+          'api-spec.md': openApiRaw ? (ctx.aiOpenApi ? 'ai-summarized-openapi-spec' : 'raw-openapi-spec-excerpt') : 'unavailable',
+        } };
+    })(),
   ];
+}
+// Provenance labels for CONTEXT.md/manifest.json (see extraction map above):
+// lets a consuming agent tell how much to trust a section without guessing.
+function staticScanMethod(content) { return content && content.trim() ? 'static-regex-scan' : 'unavailable (no scanner for this stack, or nothing matched)'; }
+function routesMethod(ctx, content) {
+  const d = ctx.detection;
+  if (d.primaryFramework === 'symfony' || d.primaryFramework === 'laravel') {
+    return content && content.includes('static scan')
+      ? 'static-regex-fallback (live debug:router/route:list not attempted by this generator)'
+      : 'unavailable (static scan found nothing; live debug:router/route:list not attempted)';
+  }
+  return staticScanMethod(content);
 }
 
 function writeRouter(root, contextDir, { repoName, label, stageIndex }) {
   const rows = stageIndex.map(({ stage, purpose, files }) =>
     `| \`stages/${stage}/\` | ${purpose} | ${files.map((f) => `\`${f.rel}\` (${f.bytes}b)`).join(', ') || '—'} |`).join('\n');
+  const extractionRows = stageIndex
+    .filter((s) => s.extraction && Object.keys(s.extraction).length)
+    .flatMap((s) => Object.entries(s.extraction).map(([file, method]) => `| \`${s.stage}/${file}\` | ${method} |`))
+    .join('\n');
   const md = `# ${repoName} — Project Context (.context)
 
-> Generated: ${new Date().toISOString()} · Stack: ${label} · Generator: v${GENERATOR_VERSION}
+> Generated: ${new Date().toISOString()} · Stack: ${label} · Generator: v${GENERATOR_VERSION} (${GENERATOR_COMMIT})
 
 This folder is an **ICM (Interpretable Context Methodology)** context structure
 (https://arxiv.org/html/2603.16021v2): numbered stages, each with a CONTEXT.md
@@ -1043,16 +1307,20 @@ contract (Inputs / Process / Outputs) and an output/ folder of focused markdown.
 2. Pick the stages relevant to your task from the index below (numbering = recommended reading order).
 3. Read each chosen stage's CONTEXT.md, then load only the output files you need.
 4. Do not load every file — the structure exists so you can scope your context.
+5. Check the extraction provenance table below before trusting a section — some
+   outputs come from a static best-effort scan rather than a live, resolved
+   source, and that changes how much weight to give them.
 
 Regenerate with: \`node generate_project_context.js\`. Ignore rules live in
-\`_config/ignore\`; the parse ledger in \`_config/manifest.json\`.
+\`_config/ignore\`; the parse ledger and per-stage extraction provenance in
+\`_config/manifest.json\`.
 
 ## Stage index
 
 | Stage | Purpose | Output files |
 |---|---|---|
 ${rows}
-`;
+${extractionRows ? `\n## Extraction provenance\n\n| Output | Method |\n|---|---|\n${extractionRows}\n` : ''}`;
   fs.writeFileSync(path.join(root, contextDir, 'CONTEXT.md'), md);
 }
 
@@ -1119,7 +1387,7 @@ Output only the above sections — no preamble, no trailing commentary.`);
   for (const stage of buildStages01to04(ctx)) {
     log.info(`Stage ${stage.name}...`);
     const written = writeStage(root, args.contextDir, stage.name, stage.contract, stage.outputs);
-    stageIndex.push({ stage: stage.name, purpose: purposes[stage.name], files: written.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages', stage.name, 'output', f)).size })) });
+    stageIndex.push({ stage: stage.name, purpose: purposes[stage.name], extraction: stage.extraction, files: written.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages', stage.name, 'output', f)).size })) });
   }
   const manifest = loadManifest(root, args.contextDir, repoName);
   log.info('Stage 05_documentation...');
@@ -1169,7 +1437,7 @@ Services: ${serviceList}
 Source directories:
 ${dirList}
 
-Identify 3-5 key architectural patterns (e.g. repository pattern, service layer, DTO, CQRS). Base this only on the directory structure and class names provided. Return a markdown bullet list only — no preamble, no heading.`);
+Identify up to 5 architectural patterns actually evidenced by the entity/service/directory names above — not patterns that are merely typical of ${detection.primaryFramework} apps in general. For each bullet: name the pattern, then cite the specific class name(s) or directory path(s) from the lists above that show it (e.g. "Service layer — UserService, OrderService in ${detection.servicesDir || 'the services directory'} separate business logic from controllers"). Every claim must be checkable against a name given above; if you cannot cite a specific name for a pattern, omit it. Do not use speculative language ("suggests", "likely", "appears to", "probably"). If fewer than 3 patterns are actually evidenced, return fewer bullets — do not pad with generic filler. Return a markdown bullet list only — no preamble, no heading.`);
 
     log.info(`Calling ${args.aiCli} — development focus areas...`);
     const focus = callAi(args.aiCli, `Analyse recent development activity on a ${detection.primaryFramework} project.
@@ -1180,7 +1448,7 @@ ${gitLog}
 Recently modified files:
 ${gitRecent}
 
-Based solely on the above, identify 3-5 areas of active development that would benefit from AI assistance. Return a markdown bullet list only — no preamble, no heading.`);
+Based solely on the above, identify up to 5 areas of active development. For each bullet, cite the specific commit message or file path from the lists above that it's based on. State plainly what changed and where — do not use marketing or speculative phrasing (e.g. "AI can help reasoning about...", "this suggests...", "may benefit from"). Every claim must reduce to a checkable fact about a commit or file listed above; if the evidence doesn't support 3 distinct areas, return fewer bullets rather than padding. Return a markdown bullet list only — no preamble, no heading.`);
 
     stage06Outputs = {
       'overview.md': overview ? `# Project Overview\n\n${overview}` : '',
@@ -1208,19 +1476,20 @@ Based solely on the above, identify 3-5 areas of active development that would b
   finalManifest.generated_at = new Date().toISOString();
   finalManifest.project.stack = stackLabel(detection, versions, devEnv, dbHints);
   finalManifest.parsed_markdown = docResult.parsedMarkdown;
-  for (const s of stageIndex) finalManifest.stages[s.stage] = { last_run: finalManifest.generated_at };
+  for (const s of stageIndex) finalManifest.stages[s.stage] = { last_run: finalManifest.generated_at, ...(s.extraction ? { extraction: s.extraction } : {}) };
   saveManifest(root, args.contextDir, finalManifest);
 }
 
 module.exports = {
   parseArgs, readText, readJson, sha256, exists, isDir, grepLines, extractBlocks, log, GENERATOR_VERSION,
-  DEFAULT_IGNORES, compileIgnorePatterns, createIgnoreMatcher, walkFiles, detectStack, detectDevEnv,
+  DEFAULT_IGNORES, compileIgnorePatterns, createIgnoreMatcher, walkFiles, latestByBasename, detectStack, detectDevEnv,
   detectDatabases, extractVersions, findCandidateSubDirs, collectStackContext, aiDetermineStack, determineAppStack,
   buildContextBlock, injectContextReference, updateAiInstructionFiles,
   schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock,
+  extractDomainNotes, annotateWithDomainNotes,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
-  checkAiAvailable, callAi, collectAiContextFiles, makeAiSummarizer,
+  checkAiAvailable, callAi, stripModelPreamble, collectAiContextFiles, makeAiSummarizer,
 };
 if (require.main === module) main();

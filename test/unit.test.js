@@ -89,3 +89,38 @@ test('parseArgs --depth falls back to 3 on non-numeric', () => {
 test('parseArgs --dir', () => {
   assert.strictEqual(g.parseArgs(['--dir', '/some/place']).dir, '/some/place');
 });
+
+test('stripModelPreamble removes leaked self-talk/routing sentences but keeps real content', () => {
+  assert.strictEqual(
+    g.stripModelPreamble('This is a plain content-generation task (writing a doc summary), not creative feature work or a coding task — no skill applies here.\n\nThe project is a Symfony API.'),
+    'The project is a Symfony API.',
+  );
+  assert.strictEqual(g.stripModelPreamble('No skill applies here. The service handles billing.'), 'The service handles billing.');
+  assert.strictEqual(g.stripModelPreamble("Let me analyze this. The service handles billing."), 'The service handles billing.');
+  // legitimate content that merely contains "task" elsewhere must survive untouched
+  assert.strictEqual(g.stripModelPreamble('The queue worker processes background tasks nightly.'), 'The queue worker processes background tasks nightly.');
+});
+
+test('extractDomainNotes parses markdown-table "Key Entities"/"Key Services" sections and "Key Gotchas" field notes', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'domain-notes-'));
+  fs.writeFileSync(path.join(tmp, 'CLAUDE.md'), [
+    '## Key Entities', '', '| Entity | Purpose |', '|---|---|', '| `Club` | A football club. |', '',
+    '## Key Gotchas', '', '- `hallOfFamePoints`: max(current, incoming) — never decreases.', '',
+    '## Key Services', '', '| Service | Purpose |', '|---|---|', '| `EconomicService` | Computes economy figures. |',
+  ].join('\n'));
+  const notes = g.extractDomainNotes({ root: tmp });
+  assert.strictEqual(notes.entities.Club, 'A football club.');
+  assert.strictEqual(notes.services.EconomicService, 'Computes economy figures.');
+  assert.strictEqual(notes.gotchas.length, 1);
+  assert.deepStrictEqual(notes.gotchas[0].names, ['hallOfFamePoints']);
+});
+
+test('annotateWithDomainNotes annotates every heading found (present note or explicit absence)', () => {
+  const md = '#### `Known`\n```php\nprivate int $id;\n```\n\n#### `Unknown`\n```php\nprivate int $id;\n```\n';
+  const out = g.annotateWithDomainNotes(md, { Known: 'A known thing.' });
+  assert.match(out, /#### `Known`\n\n> \*\*Purpose:\*\* A known thing\./);
+  assert.match(out, /#### `Unknown`\n\n> _No hand-written notes found/);
+});

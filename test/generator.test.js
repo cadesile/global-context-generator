@@ -173,3 +173,137 @@ test('--dir with missing path exits 1 without writes', () => {
   assert.match(r.stderr, /Directory not found/);
   assert.ok(!fs.existsSync(path.join(elsewhere, '.context')), 'no writes on failure');
 });
+
+function addMigration(root, name, sql) {
+  fs.writeFileSync(path.join(root, 'migrations', `${name}.php`), `<?php\nnamespace DoctrineMigrations;\nfinal class ${name} {\n    public function up(): void {\n        $this->addSql('${sql}');\n    }\n}\n`);
+}
+
+test('schema.md reflects newly added migrations after a rerun, not stale ones', () => {
+  const root = copyFixture('symfony-app');
+  // Pad with enough "middle" migrations that the fixture's one stale migration
+  // sits outside the latest-10 window once 3 new ones are added on rerun.
+  for (let i = 0; i < 8; i++) {
+    addMigration(root, `Version2026060${i}120000`, `CREATE TABLE mid${i} (id SERIAL NOT NULL)`);
+  }
+  const r1 = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r1.status, 0, r1.stderr);
+  const before = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
+  assert.match(before, /Version20260301120000/);
+
+  for (const [i, name] of ['Version20260710120000', 'Version20260711120000', 'Version20260712120000'].entries()) {
+    addMigration(root, name, `CREATE TABLE t${i} (id SERIAL NOT NULL)`);
+  }
+  const r2 = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r2.status, 0, r2.stderr);
+  const after = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
+  assert.match(after, /Version20260710120000/);
+  assert.match(after, /Version20260711120000/);
+  assert.match(after, /Version20260712120000/);
+  assert.ok(!after.includes('AUTO_INCREMENT'), 'stale MySQL-era migration must not still be reported once newer ones exist within the latest-10 window');
+});
+
+test('latest-10 migration selection is not fooled by an archive/ subdirectory sorting after plain filenames', () => {
+  // Regression: filesUnder/walkFiles sort by full relative path for stable tree
+  // output. A subdirectory like "archive/" sorts AFTER sibling files named
+  // "VersionYYYYMMDDHHMMSS.php" (lowercase 'a' > uppercase 'V'), so naively
+  // slicing the last 10 of that path-sorted list surfaces old archived
+  // migrations instead of the genuinely latest ones living flat in the dir.
+  const root = copyFixture('symfony-app');
+  fs.mkdirSync(path.join(root, 'migrations/archive'), { recursive: true });
+  fs.renameSync(
+    path.join(root, 'migrations/Version20260301120000.php'),
+    path.join(root, 'migrations/archive/Version20260301120000.php'),
+  );
+  // Pad with enough plain (non-archived) migrations that a naive path-sorted
+  // slice(-10) would land entirely inside "migrations/archive/..." territory
+  // if the bug were present, proving the fix picks the true latest by name.
+  for (let i = 0; i < 8; i++) {
+    addMigration(root, `Version2026060${i}120000`, `CREATE TABLE mid${i} (id SERIAL NOT NULL)`);
+  }
+  for (const [i, name] of ['Version20260710120000', 'Version20260711120000', 'Version20260712120000'].entries()) {
+    addMigration(root, name, `CREATE TABLE t${i} (id SERIAL NOT NULL)`);
+  }
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const schema = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
+  assert.match(schema, /Version20260712120000/, 'newest migration must be reported');
+  assert.ok(!schema.includes('AUTO_INCREMENT'), 'archived MySQL-era migration must not be reported as one of the latest');
+});
+
+test('symfony routes.md falls back to a static #[Route] scan when debug:router cannot be run', () => {
+  const root = copyFixture('symfony-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const routes = fs.readFileSync(path.join(root, '.context/stages/04_interfaces/output/routes.md'), 'utf8');
+  assert.match(routes, /static scan/);
+  assert.match(routes, /GET.*\/api\/foo\/\{id\}.*FooController::show/);
+  assert.match(routes, /POST.*\/api\/foo.*FooController::create/);
+  assert.ok(!/Run: `bin\/console/.test(routes), 'must not degrade to a bare "run this yourself" placeholder when routes were actually found');
+});
+
+test('laravel routes.md falls back to a static Route:: scan when artisan cannot be run', () => {
+  const root = copyFixture('laravel-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const routes = fs.readFileSync(path.join(root, '.context/stages/04_interfaces/output/routes.md'), 'utf8');
+  assert.match(routes, /static scan/);
+  assert.match(routes, /Route::get\('\/users'/);
+  assert.match(routes, /Route::post\('\/users'/);
+});
+
+test('domain notes from a hand-maintained CLAUDE.md (table format) are merged uniformly into entities.md', () => {
+  const root = copyFixture('symfony-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const entities = fs.readFileSync(path.join(root, '.context/stages/03_data/output/entities.md'), 'utf8');
+  // Foo is named in the CLAUDE.md "Key Entities" table -> gets its purpose.
+  assert.match(entities, /#### `Foo`\n\n> \*\*Purpose:\*\* Tracks a foo and its hall-of-fame point total\./);
+  // Bar is NOT named anywhere in the docs -> must get an explicit absence
+  // marker, not silence, so an agent can tell "checked, nothing found" apart
+  // from "the merge pass never looked at this one."
+  assert.match(entities, /#### `Bar`\n\n> _No hand-written notes found/);
+  // hallOfFamePoints' business rule lives in "Key Gotchas", disconnected from
+  // the entity table — it must still land next to the specific field it
+  // governs (inside Foo's dump), not just be dropped or bolted onto the class.
+  assert.match(entities, /private int \$hallOfFamePoints;\n```\n\n> \*\*Field note:\*\* `hallOfFamePoints`: max\(current, incoming\) — never decreases\./);
+});
+
+test('the same CLAUDE.md merge covers 04_interfaces (services.md, controllers.md), not just 03_data', () => {
+  const root = copyFixture('symfony-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  // FooController is named in CLAUDE.md's "Key Services" table (also used for
+  // controllers) — stage 04 must annotate it exactly like stage 03 annotated
+  // Foo, from the same source and the same attach-by-name logic. These two
+  // stages must not drift independently.
+  const controllers = fs.readFileSync(path.join(root, '.context/stages/04_interfaces/output/controllers.md'), 'utf8');
+  assert.match(controllers, /#### `FooController`\n\n> \*\*Purpose:\*\* Handles inbound foo requests and validation\./);
+});
+
+test('router and manifest stamp generator commit and per-output extraction provenance', () => {
+  const root = copyFixture('symfony-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const router = fs.readFileSync(path.join(root, '.context/CONTEXT.md'), 'utf8');
+  assert.match(router, /Generator: v[\d.]+ \([0-9a-f]{7,}|unknown\)/);
+  assert.match(router, /## Extraction provenance/);
+  assert.match(router, /`04_interfaces\/routes\.md` \| static-regex-fallback/);
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, '.context/_config/manifest.json'), 'utf8'));
+  assert.match(manifest.generator_commit, /^[0-9a-f]{7,}$|^unknown$/);
+  assert.strictEqual(manifest.stages['03_data'].extraction['schema.md'], 'static-regex-scan');
+  assert.match(manifest.stages['04_interfaces'].extraction['routes.md'], /static-regex-fallback/);
+});
+
+test('06_synthesis strips leaked model self-talk/routing preamble before writing output files', () => {
+  const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const synthDir = path.join(root, '.context/stages/06_synthesis/output');
+  for (const file of ['overview.md', 'architecture-notes.md', 'current-focus.md']) {
+    const content = fs.readFileSync(path.join(synthDir, file), 'utf8');
+    assert.ok(!/no skill applies/i.test(content), `${file} leaked "no skill applies" preamble`);
+    assert.ok(!/this is a[n]? .*\btask\b/i.test(content), `${file} leaked "this is a ... task" preamble`);
+    assert.match(content, /FooController handles inbound foo requests/, `${file} should still contain the real content`);
+  }
+});
