@@ -67,6 +67,7 @@ Resolved stack details (framework, `appDir`, `primaryExt`, `modelsDir`, etc.) fl
 ```
 .context/
   CONTEXT.md                     # router — stage index, links into each stage
+  KNOWLEDGE_GAPS.md               # AI review of the whole folder — open questions for a human (only when AI is available)
   _config/
     ignore                       # seeded once with defaults; never overwritten
     manifest.json                # parse ledger (written last, after all stages)
@@ -97,6 +98,25 @@ parsed, keyed by repo-relative path:
 - **Manifest written last** — `manifest.json` is only written after every
   stage (including the router) has finished, so a run that fails partway
   through never leaves a ledger pointing at outputs that don't exist.
+
+## Knowledge-gap review
+
+After all six stages are written, if an AI CLI is available, one more AI
+call reviews the whole `.context/` folder — prioritizing `03_data` and
+`04_interfaces`, plus the extraction-provenance table — and writes
+`.context/KNOWLEDGE_GAPS.md`: a list of open questions the generator
+couldn't answer from the code or docs alone. Each entry has a short topic,
+the specific open question, and why it matters, e.g. a business rule that
+isn't written down anywhere, or a section that only came from a
+static-scan fallback and was never verified live.
+
+This file is meant to be **triaged by a human**, not auto-resolved by the
+tool — answer the questions yourself (e.g. by adding them to
+CLAUDE.md/AGENTS.md, which the generator already merges into
+`entities.md`/`services.md` on the next run) or file them as tickets.
+
+Under `--no-ai` (or with no AI CLI on PATH), this step is skipped entirely:
+`KNOWLEDGE_GAPS.md` is not created, and the router has no pointer to it.
 
 ## Ignore rules
 
@@ -132,7 +152,9 @@ over a generic Node detection so that projects with frontend tooling (`webpack`,
 
 Read `.context/CONTEXT.md` first; it's the router into the stage index. Load
 only the stage `output/` files you actually need for the task at hand instead
-of pulling the whole tree into context.
+of pulling the whole tree into context. If the router links to
+`KNOWLEDGE_GAPS.md`, that file lists open questions the generation run
+flagged — read it as a caveat list, not as extracted fact.
 
 ## Tests
 
