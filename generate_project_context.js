@@ -164,18 +164,21 @@ function detectStack(root, dir = '.') {
   const pkg = readJson(p(dir, 'package.json'));
   if (pkg) {
     d.stacks.node = true;
-    if (d.primaryLang === 'unknown') d.primaryLang = 'node';
-    d.primaryExt = 'ts';
-    d.sourceDir = isDir(p(dir, 'src')) ? rel(dir, 'src') : rel(dir, 'app');
-    const deps = pkg.dependencies || {};
-    if (deps.next) {
-      d.stacks.next = true; d.primaryFramework = 'nextjs';
-      d.modelsDir = rel(dir, 'app/models'); d.controllersDir = rel(dir, 'app/api'); d.servicesDir = rel(dir, 'app/services');
-    } else if (deps.express) {
-      d.stacks.express = true; d.primaryFramework = 'express';
-      d.modelsDir = rel(dir, 'src/models'); d.controllersDir = rel(dir, 'src/controllers'); d.servicesDir = rel(dir, 'src/services');
+    // Only promote node to primary if no other language was detected first
+    if (d.primaryLang === 'unknown') {
+      d.primaryLang = 'node';
+      d.primaryExt = 'ts';
+      d.sourceDir = isDir(p(dir, 'src')) ? rel(dir, 'src') : rel(dir, 'app');
+      const deps = pkg.dependencies || {};
+      if (deps.next) {
+        d.stacks.next = true; d.primaryFramework = 'nextjs';
+        d.modelsDir = rel(dir, 'app/models'); d.controllersDir = rel(dir, 'app/api'); d.servicesDir = rel(dir, 'app/services');
+      } else if (deps.express) {
+        d.stacks.express = true; d.primaryFramework = 'express';
+        d.modelsDir = rel(dir, 'src/models'); d.controllersDir = rel(dir, 'src/controllers'); d.servicesDir = rel(dir, 'src/services');
+      }
+      if (d.primaryFramework === 'unknown') d.primaryFramework = 'node';
     }
-    if (d.primaryFramework === 'unknown') d.primaryFramework = 'node';
   }
 
   for (const pyfile of ['requirements.txt', 'pyproject.toml', 'setup.py']) {
@@ -216,6 +219,112 @@ function detectStack(root, dir = '.') {
   return d;
 }
 
+// ── AI-assisted stack determination ─────────────────────────────────────────
+// Scan common backend subdirectory names for framework manifests.
+function findCandidateSubDirs(root) {
+  const out = [];
+  for (const sub of ['backend', 'api', 'server', 'app', 'web', 'application']) {
+    if (!isDir(path.join(root, sub))) continue;
+    const d = detectStack(root, sub);
+    if (d.primaryLang !== 'unknown') out.push({ sub, detection: d });
+  }
+  return out;
+}
+
+// Collect key project files to help AI (or human) decide the primary stack.
+function collectStackContext(root, candidates) {
+  let out = '';
+  const seen = new Set();
+  const addFile = (rel) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const content = readText(path.join(root, rel));
+    if (!content) return;
+    out += `### ${rel}\n\`\`\`\n${content.slice(0, 2000)}\n\`\`\`\n\n`;
+  };
+  for (const f of ['CLAUDE.md', 'AGENTS.md', '.claude/CLAUDE.md', 'README.md']) addFile(f);
+  for (const f of ['composer.json', 'package.json']) addFile(f);
+  for (const { sub } of candidates) {
+    for (const f of ['composer.json', 'package.json']) addFile(path.posix.join(sub, f));
+  }
+  return out || '(no key context files found at root)';
+}
+
+// Ask AI to resolve which stack is primary when multiple are detected.
+function aiDetermineStack(root, rootDetection, candidates, aiCli) {
+  const context = collectStackContext(root, candidates);
+  const rootInfo = rootDetection.primaryLang !== 'unknown'
+    ? `Root: ${rootDetection.primaryFramework} (${rootDetection.primaryLang})`
+    : 'Root: no framework detected';
+  const subInfo = candidates.length
+    ? `Subdirectories with detected frameworks:\n${candidates.map((c) => `- ${c.sub}/ → ${c.detection.primaryFramework} (${c.detection.primaryLang})`).join('\n')}`
+    : 'No framework found in common subdirectories.';
+
+  const result = callAi(aiCli, `You are configuring a code context generator. Determine the PRIMARY backend/application stack for this project.
+
+Detection results:
+${rootInfo}
+${subInfo}
+
+Key project files (truncated):
+${context}
+
+Identify the primary application stack (not build tools or frontend-only packages).
+Respond in exactly this format — no other text:
+STACK: <framework-name>
+APPDIR: <relative-path-or-dot>`);
+
+  if (!result) return null;
+  const stackMatch = result.match(/^STACK:\s*(.+)$/m);
+  const appdirMatch = result.match(/^APPDIR:\s*(.+)$/m);
+  if (!stackMatch || !appdirMatch) return null;
+  return { framework: stackMatch[1].trim().toLowerCase(), appDir: appdirMatch[1].trim() };
+}
+
+// Orchestrate full stack determination: auto-detect → AI → TTY prompt.
+async function determineAppStack(root, ai, args) {
+  const rootDetection = detectStack(root);
+  const candidates = findCandidateSubDirs(root);
+
+  // Unambiguous: root has a stack, no competing backend subdirs
+  if (rootDetection.primaryLang !== 'unknown' && candidates.length === 0) {
+    return { detection: rootDetection, appDir: '.' };
+  }
+
+  // Unambiguous: root has nothing, exactly one backend subdir detected
+  if (rootDetection.primaryLang === 'unknown' && candidates.length === 1) {
+    return { detection: candidates[0].detection, appDir: candidates[0].sub };
+  }
+
+  // Ambiguous (root + subdir both have stacks, or multiple subdirs, or nothing found):
+  // use AI to read CLAUDE.md + manifests and decide.
+  if (ai.useAi) {
+    log.info(`Calling ${args.aiCli} — determining primary tech stack...`);
+    const aiResult = aiDetermineStack(root, rootDetection, candidates, args.aiCli);
+    if (aiResult) {
+      const sub = aiResult.appDir === '.' ? '' : aiResult.appDir;
+      const d = (sub && isDir(path.join(root, sub))) ? detectStack(root, sub) : detectStack(root);
+      if (d.primaryLang !== 'unknown') return { detection: d, appDir: sub || '.' };
+    }
+  }
+
+  // TTY fallback: ask the user
+  if (process.stdin.isTTY) {
+    const readline = require('node:readline/promises');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    const sub = (await rl.question('  App code in a subdirectory? Enter path (or press Enter to skip): ')).trim();
+    rl.close();
+    if (sub && isDir(path.join(root, sub))) {
+      const d = detectStack(root, sub);
+      if (d.primaryLang !== 'unknown') return { detection: d, appDir: sub };
+    }
+  }
+
+  // Last resort: best candidate or root
+  if (candidates.length > 0) return { detection: candidates[0].detection, appDir: candidates[0].sub };
+  return { detection: rootDetection, appDir: '.' };
+}
+
 // ── Dev environment (port of bash lines 195–225) ─────────────────────────────
 function detectDevEnv(root, detection) {
   const out = { devEnv: 'bare', landoRecipe: '', landoPhp: '', landoDb: '', runPrefix: '', consoleCmd: '' };
@@ -245,7 +354,8 @@ function detectDatabases(root, appDir) {
   for (const f of ['composer.json', 'package.json', 'requirements.txt', 'pyproject.toml', '.env', '.lando.yml']) {
     const content = readText(path.join(root, appDir, f)) ?? readText(path.join(root, f));
     if (!content) continue;
-    const lc = content.toLowerCase();
+    // Strip comment lines to avoid false positives from commented-out examples (e.g. Symfony's default .env)
+    const lc = content.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n').toLowerCase();
     if (lc.includes('mysql')) hints.add('MySQL');
     if (lc.includes('postgres')) hints.add('PostgreSQL');
     if (lc.includes('mongodb')) hints.add('MongoDB');
@@ -358,12 +468,12 @@ function _schemaGo(ctx) {
 }
 function schemaBlock(ctx) {
   const s = ctx.detection.stacks;
-  if (s.node) return _schemaSqlite(ctx);
   if (s.symfony) return _schemaDoctrine(ctx);
   if (s.laravel) return _schemaLaravel(ctx);
   if (s.django) return _schemaDjango(ctx);
   if (s.rails) return _schemaRails(ctx);
   if (s.go) return _schemaGo(ctx);
+  if (s.node) return _schemaSqlite(ctx);
   return `_No schema scanner available for detected stack (${ctx.detection.primaryFramework})._\n`;
 }
 
@@ -396,12 +506,12 @@ function _entitiesRails(ctx) {
 }
 function entitiesBlock(ctx) {
   const s = ctx.detection.stacks;
-  if (s.node) return _entitiesTypescript(ctx);
   if (s.symfony) return _entitiesDoctrine(ctx);
   if (s.laravel) return _entitiesEloquent(ctx);
   if (s.django) return _entitiesDjango(ctx);
   if (s.rails) return _entitiesRails(ctx);
   if (s.go) return _schemaGo(ctx);
+  if (s.node) return _entitiesTypescript(ctx);
   return `_No entity scanner available for detected stack (${ctx.detection.primaryFramework})._\n`;
 }
 
@@ -604,7 +714,8 @@ function collectAiContextFiles(ctx) {
     addFile(appPrefix(f));
   }
   addFile(appPrefix('config/packages/security.yaml'));
-  addFile('README.md');
+  // Always include root-level context docs (README, CLAUDE.md, AGENTS.md) regardless of appDir
+  for (const f of ['README.md', 'CLAUDE.md', 'AGENTS.md', '.claude/CLAUDE.md']) addFile(f);
   const envRel = appPrefix('.env');
   const envContent = readText(path.join(ctx.root, envRel));
   if (envContent !== null) {
@@ -653,12 +764,12 @@ function _sourceDirList(ctx) {
 
 function sectionLabels(detection, dbHints) {
   const s = detection.stacks; const db = dbHints || 'SQL';
-  if (s.node) return { schema: 'Database Schema (SQLite)', entities: 'TypeScript Entity Definitions', state: 'Store Shapes (State)' };
   if (s.symfony) return { schema: `Database Schema (Doctrine / ${db})`, entities: 'Doctrine Entity Definitions', state: '' };
   if (s.laravel) return { schema: `Database Schema (Eloquent / ${db})`, entities: 'Eloquent Model Definitions', state: '' };
   if (s.django) return { schema: `Database Schema (Django ORM / ${db})`, entities: 'Django Model Definitions', state: '' };
   if (s.rails) return { schema: `Database Schema (ActiveRecord / ${db})`, entities: 'ActiveRecord Model Definitions', state: '' };
   if (s.go) return { schema: 'Database Schema (Go structs)', entities: 'Go Type Definitions', state: '' };
+  if (s.node) return { schema: `Database Schema (${db || 'SQLite'})`, entities: 'TypeScript Entity Definitions', state: 'Store Shapes (State)' };
   return { schema: 'Database Schema', entities: 'Entity Definitions', state: '' };
 }
 
@@ -881,24 +992,20 @@ async function main() {
   const root = path.resolve(args.dir ?? '.');
   if (!isDir(root)) { console.error(`Directory not found: ${args.dir}`); process.exit(1); }
   const repoName = path.basename(root);
-  let detection = detectStack(root);
-  let appDir = '.';
-  if (detection.primaryLang === 'unknown' && process.stdin.isTTY) {
-    const readline = require('node:readline/promises');
-    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
-    const sub = (await rl.question('  App code in a subdirectory? Enter path (or press Enter to skip): ')).trim();
-    rl.close();
-    if (sub && isDir(path.join(root, sub))) { detection = detectStack(root, sub); if (detection.primaryLang !== 'unknown') appDir = sub; }
-  }
+  // Phase 1: AI availability — needed for stack determination below.
+  const ai = checkAiAvailable(args);
+  if (!ai.useAi && args.useAi) log.info(ai.reason);
+  // Phase 2: Determine tech stack (AI-assisted when ambiguous, then TTY, then heuristics).
+  const { detection, appDir } = await determineAppStack(root, ai, args);
+  // Phase 3: Environment, DB hints, versions — all depend on the resolved stack + appDir.
   const devEnv = detectDevEnv(root, detection);
   const dbHints = detectDatabases(root, appDir);
   const versions = extractVersions(root, appDir, detection);
-  if (args.debugDetection) { console.log(JSON.stringify({ repoName, detection, devEnv, dbHints, versions, useAi: args.useAi }, null, 2)); return; }
+  if (args.debugDetection) { console.log(JSON.stringify({ repoName, detection, devEnv, dbHints, versions, useAi: ai.useAi }, null, 2)); return; }
   // All filesystem writes happen after the debug-detection early-return above,
   // so --debug-detection stays strictly read-only.
+  // Phase 4: Ignore rules — set up after stack is known.
   seedIgnoreFile(root, args.contextDir);
-  const ai = checkAiAvailable(args);
-  if (!ai.useAi && args.useAi) log.info(ai.reason);
   const ignoreFn = createIgnoreMatcher({ root, contextDir: args.contextDir });
   const ctx = { root, appDir, detection, devEnv, dbHints, versions, ignoreFn, treeDepth: args.treeDepth, contextDir: args.contextDir, useAi: ai.useAi, aiCli: args.aiCli, repoName };
 
@@ -1033,7 +1140,7 @@ Based solely on the above, identify 3-5 areas of active development that would b
 module.exports = {
   parseArgs, readText, readJson, sha256, exists, isDir, grepLines, extractBlocks, log, GENERATOR_VERSION,
   DEFAULT_IGNORES, compileIgnorePatterns, createIgnoreMatcher, walkFiles, detectStack, detectDevEnv,
-  detectDatabases, extractVersions,
+  detectDatabases, extractVersions, findCandidateSubDirs, collectStackContext, aiDetermineStack, determineAppStack,
   schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter,

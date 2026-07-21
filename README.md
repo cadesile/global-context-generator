@@ -9,7 +9,7 @@ Based on the Interpretable Context Methodology (https://arxiv.org/html/2603.1602
 
 - Node.js >= 18 (no npm dependencies)
 - git _(optional — enables git activity + AI focus sections)_
-- Claude CLI or Gemini CLI _(optional — enables AI summaries)_
+- Claude CLI or Gemini CLI _(optional — enables AI summaries and stack disambiguation)_
 
 ## Installation
 
@@ -48,6 +48,19 @@ node generate_project_context.js
 # Generate context for another project without cd-ing into it
 node ~/Projects/global-context-generator/generate_project_context.js --ai gemini --dir /some/place/local
 ```
+
+## Stack detection
+
+The generator runs a four-step resolution process before writing anything:
+
+1. **Root scan** — looks for framework manifests (`composer.json`, `package.json`, `go.mod`, `Gemfile`, `requirements.txt`) at the project root.
+2. **Subdir scan** — scans common backend directory names (`backend/`, `api/`, `server/`, `app/`, `web/`) for the same manifests, independent of the root scan.
+3. **AI disambiguation** — when the result is ambiguous (e.g. a frontend `package.json` at root _and_ a Symfony `composer.json` in `backend/`), the AI CLI reads `CLAUDE.md`, `README.md`, and the manifests to determine which stack is primary and where the app code lives.
+4. **TTY fallback** — if AI is unavailable and the stack is still ambiguous, you are prompted to enter the app subdirectory path.
+
+This means projects with a frontend build tool (`package.json` for webpack, Vite, etc.) co-located alongside a PHP, Go, or Python backend are handled correctly — the primary backend stack always wins.
+
+Resolved stack details (framework, `appDir`, `primaryExt`, `modelsDir`, etc.) flow into every subsequent stage so entity paths, schema scanners, section labels, and DB hints are all computed from the correct stack.
 
 ## Output structure
 
@@ -104,12 +117,16 @@ globs, trailing `/` for directories, leading `/` to anchor at the repo root).
 
 | Stack | Schema | Entities | State |
 |---|---|---|---|
-| React Native / Expo | SQLite (`schema.ts` / `.sql`) | TypeScript interfaces & types | Zustand store shapes |
 | Symfony | Doctrine migrations + entity columns | `#[ORM]` property map | — |
 | Laravel | `database/migrations` + field chains | Eloquent `$fillable`, casts, relations | — |
+| Next.js / Express / Node | SQL/`.sql` files or `schema.ts` | TypeScript interfaces & types | Zustand store shapes |
 | Django | Latest migrations | `models.py` class + field definitions | — |
 | Rails | `db/schema.rb` | ActiveRecord associations + validations | — |
 | Go | Struct definitions | Type definitions | — |
+
+Framework-specific stacks (Symfony, Laravel, Django, etc.) always take priority
+over a generic Node detection so that projects with frontend tooling (`webpack`,
+`vite`, etc.) alongside a backend framework are classified correctly.
 
 ## For agents
 
