@@ -221,3 +221,28 @@ test('extractDeclaredFieldNames pulls real property names but not incidental typ
   assert.ok(!names.has('json'), 'a type keyword must not be treated as a declared field name');
   assert.ok(!names.has('ORM'), 'a decorator namespace must not be treated as a declared field name');
 });
+
+test('extractSqlStatements captures a CREATE TABLE in full even when a DEFAULT value contains literal braces', () => {
+  const sql = "CREATE TABLE achievements (\n  id TEXT PRIMARY KEY,\n  metadata TEXT NOT NULL DEFAULT '{}'\n);\nCREATE TABLE next_table (\n  id TEXT PRIMARY KEY\n);";
+  const out = g.extractSqlStatements(sql, /CREATE TABLE/i);
+  assert.match(out, /metadata TEXT NOT NULL DEFAULT '\{\}'\n\);/, 'the closing `);` must survive — brace content must not be mistaken for a block delimiter');
+  assert.match(out, /CREATE TABLE next_table/, 'the following statement must still be captured');
+});
+
+test('extractSqlStatements handles nested parens (DEFAULT with a function call) without closing early', () => {
+  const sql = "CREATE TABLE store_state (\n  key TEXT PRIMARY KEY,\n  updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n);";
+  const out = g.extractSqlStatements(sql, /CREATE TABLE/i);
+  assert.match(out, /updated_at TEXT NOT NULL DEFAULT \(datetime\('now'\)\)\n\);/);
+});
+
+test('extractSqlStatements has no aggregate line cap — a statement far down a long file is captured in full', () => {
+  const tables = [];
+  for (let i = 0; i < 30; i++) {
+    tables.push(`CREATE TABLE pad_${i} (\n  id INTEGER PRIMARY KEY,\n  col_a TEXT NOT NULL,\n  col_b TEXT NOT NULL,\n  col_c TEXT NOT NULL\n);`);
+  }
+  tables.push('CREATE TABLE last_table (\n  id INTEGER PRIMARY KEY,\n  note TEXT NOT NULL\n);');
+  const sql = tables.join('\n');
+  assert.ok(sql.split('\n').length > 120, 'fixture must actually exceed the old 120-line aggregate cap to be a meaningful test');
+  const out = g.extractSqlStatements(sql, /CREATE TABLE/i);
+  assert.match(out, /CREATE TABLE last_table \(\n  id INTEGER PRIMARY KEY,\n  note TEXT NOT NULL\n\);/, 'a statement past the old 120-line budget must still be captured whole, not sliced off');
+});

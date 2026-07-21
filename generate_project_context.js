@@ -412,6 +412,34 @@ function latestByBasename(files, n) {
   return [...files].sort((a, b) => path.basename(a).localeCompare(path.basename(b))).slice(-n);
 }
 
+// SQL statements are delimited by balanced PARENTHESES, not braces — reusing
+// the brace-balanced extractBlocks() here (as an earlier version did) breaks
+// two ways: a literal `{}`/`{...}` inside a DEFAULT value (e.g. `DEFAULT
+// '{}'`) trips its brace-depth counter to a false "closed" before the
+// statement's real `);`, and its aggregate maxLines cap slices whichever
+// statement happens to fall across that line budget, independent of where
+// any one statement actually ends. Track paren depth instead (braces never
+// matter to SQL structure at all) and terminate each statement at its own
+// `;` once parens are back to 0, with no cap on how many statements/lines
+// the full scan can return — the schema is the one artifact worth capturing
+// in full rather than budget-truncating.
+function extractSqlStatements(content, startRegex) {
+  const lines = content.split('\n');
+  const out = [];
+  let inBlock = false, parenDepth = 0, sawParen = false, buf = [];
+  for (const line of lines) {
+    if (!inBlock && startRegex.test(line)) { inBlock = true; parenDepth = 0; sawParen = false; buf = []; }
+    if (!inBlock) continue;
+    buf.push(line);
+    for (const c of line) {
+      if (c === '(') { parenDepth++; sawParen = true; }
+      else if (c === ')') { parenDepth = Math.max(0, parenDepth - 1); }
+    }
+    if (sawParen && parenDepth === 0 && line.includes(';')) { out.push(buf.join('\n')); inBlock = false; }
+  }
+  return out.join('\n\n');
+}
+
 // ── Schema scanners (bash lines 496–615) ─────────────────────────────────────
 function _schemaSqlite(ctx) {
   const files = walkFiles(ctx.root, ctx.ignoreFn, { extensions: ['.sql'] })
@@ -420,7 +448,7 @@ function _schemaSqlite(ctx) {
   if (!files.length) return '_No schema file found._\n';
   return files.map((f) => {
     const content = readText(path.join(ctx.root, f)) || '';
-    const blocks = extractBlocks(content, /CREATE TABLE/i);
+    const blocks = extractSqlStatements(content, /CREATE TABLE/i);
     const sqlStatements = blocks || grepLines(content, /CREATE TABLE|^\s+\w+ (TEXT|INTEGER|REAL|BLOB)/i, 40).join('\n');
     return `**\`${f}\`**\n${codeFence('sql', sqlStatements)}`;
   }).join('\n');
@@ -1628,7 +1656,7 @@ Output only the gaps in that format — no preamble, no trailing commentary.`);
 }
 
 module.exports = {
-  parseArgs, readText, readJson, sha256, exists, isDir, grepLines, extractBlocks, log, GENERATOR_VERSION,
+  parseArgs, readText, readJson, sha256, exists, isDir, grepLines, extractBlocks, extractSqlStatements, log, GENERATOR_VERSION,
   DEFAULT_IGNORES, compileIgnorePatterns, createIgnoreMatcher, walkFiles, latestByBasename, detectStack, detectDevEnv,
   detectDatabases, extractVersions, findCandidateSubDirs, collectStackContext, aiDetermineStack, determineAppStack,
   buildContextBlock, injectContextReference, updateAiInstructionFiles,

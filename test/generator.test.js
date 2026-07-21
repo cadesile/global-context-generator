@@ -27,6 +27,24 @@ test('full run creates ICM skeleton with contracts (expo, no-ai)', () => {
   assert.match(router, /Interpretable Context Methodology|ICM/);
 });
 
+test('schema.md captures every CREATE TABLE in schema.sql in full, including a braced DEFAULT and a table far down a long file', () => {
+  // Regression: the sqlite schema scanner used to reuse a brace-balanced
+  // extractor built for TS/Go blocks. A `DEFAULT '{}'` value tripped its
+  // brace counter and truncated that table early, and its aggregate
+  // 120-line cap sliced off whichever table fell across that budget,
+  // regardless of statement boundaries. test/fixtures/expo-app's schema.sql
+  // has 19 tables (>120 lines once rendered) specifically to cover both:
+  // `settings` has a `{}` default, `zzz_last_table` is the last one.
+  const root = copyFixture('expo-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const schema = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
+  assert.match(schema, /CREATE TABLE settings \(\n {2}id INTEGER PRIMARY KEY,\n {2}data TEXT NOT NULL DEFAULT '\{\}',\n {2}updated_at TEXT NOT NULL DEFAULT \(datetime\('now'\)\)\n\);/,
+    'settings must be captured whole, including its closing `);`, despite the `{}` default value');
+  assert.match(schema, /CREATE TABLE zzz_last_table \(\n {2}id INTEGER PRIMARY KEY,\n {2}note TEXT NOT NULL\n\);/,
+    'the last table in the file must not be sliced off by an aggregate line cap');
+});
+
 test('ignore seed file is never overwritten', () => {
   const root = copyFixture('expo-app');
   fs.mkdirSync(path.join(root, '.context/_config'), { recursive: true });
