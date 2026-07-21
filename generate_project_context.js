@@ -1424,6 +1424,17 @@ Output only the above sections — no preamble, no trailing commentary.`);
     const written = writeStage(root, args.contextDir, stage.name, stage.contract, stage.outputs);
     stageIndex.push({ stage: stage.name, purpose: purposes[stage.name], extraction: stage.extraction, files: written.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages', stage.name, 'output', f)).size })) });
   }
+  // Point AI instruction files (CLAUDE.md etc.) at the generated context
+  // BEFORE stage 05 indexes markdown files: if this creates CLAUDE.md fresh
+  // (project had none), stage 05 must see it in this same run — otherwise
+  // the file is invisible to the ledger until the next run, so a rerun with
+  // no source changes still shows "1 parsed" instead of "0 parsed" once for
+  // a file that was never actually edited.
+  const aiFileResults = updateAiInstructionFiles(root, args.contextDir);
+  for (const { rel, result } of aiFileResults) {
+    if (result !== 'unchanged') log.success(`${result}: ${rel} → context pointer`);
+  }
+
   const manifest = loadManifest(root, args.contextDir, repoName);
   log.info('Stage 05_documentation...');
   const summarizer = ai.useAi ? makeAiSummarizer(ctx) : () => '';
@@ -1527,10 +1538,6 @@ Output only the gaps in that format — no preamble, no trailing commentary.`);
 
   writeRouter(root, args.contextDir, { repoName, label: stackLabel(detection, versions, devEnv, dbHints), stageIndex, hasKnowledgeGaps });
   log.success(`${args.contextDir}/ generated`);
-  const aiFileResults = updateAiInstructionFiles(root, args.contextDir);
-  for (const { rel, result } of aiFileResults) {
-    if (result !== 'unchanged') log.success(`${result}: ${rel} → context pointer`);
-  }
 
   const finalManifest = emptyManifest(repoName);
   finalManifest.generated_at = new Date().toISOString();
