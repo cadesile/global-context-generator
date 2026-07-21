@@ -592,6 +592,20 @@ function modelsBlock(ctx) { return signatureScan(ctx, 'modelsDir', 'models', 15)
 function controllersBlock(ctx) { return signatureScan(ctx, 'controllersDir', 'controllers', 20); }
 function servicesBlock(ctx) { return signatureScan(ctx, 'servicesDir', 'services', 12); }
 
+// A client-only stack (a React Native/Expo app, a bare TS library, a CLI
+// tool) has no server-side routing convention to scan at all. Route/
+// controller/service extraction below is written for backend MVC-style
+// frameworks; running its regexes against arbitrary client code produces
+// false positives (e.g. a bare `.get(`/`.set(` scan matching `Map.get(...)`
+// calls in unrelated engine logic) rather than skipping cleanly. Gate on
+// this before running any of that scanning.
+function hasServerFramework(d) {
+  return d.primaryFramework === 'symfony' || d.primaryFramework === 'laravel'
+    || !!d.stacks.express || !!d.stacks.next || !!d.stacks.fastapi || !!d.stacks.flask
+    || !!d.stacks.django || !!d.stacks.rails || !!d.stacks.go;
+}
+const NOT_APPLICABLE_NO_SERVER_FRAMEWORK = 'not-applicable (no server framework detected for this stack)';
+
 // ── Routes (bash lines 457–471) ──────────────────────────────────────────────
 // Symfony/Laravel routes are best extracted live (`bin/console debug:router`,
 // `php artisan route:list`) since that reflects the resolved route table
@@ -634,13 +648,18 @@ function _routesLaravelStatic(ctx) {
 }
 function routesBlock(ctx) {
   const d = ctx.detection;
+  if (!hasServerFramework(d)) {
+    return '_Not applicable — no recognized server framework (Express/Next.js/Symfony/Laravel/Django/Flask/FastAPI/Rails/Go) '
+      + 'was detected for this stack. Skipping route extraction rather than scanning client-side code, which would otherwise '
+      + 'match arbitrary method calls (e.g. `Map.get(...)`) as if they were route definitions._\n';
+  }
   if (d.primaryFramework === 'symfony') {
     return _routesSymfonyStatic(ctx) || 'No `#[Route(...)]` attributes found via static scan (and `bin/console debug:router` was not run).\n';
   }
   if (d.primaryFramework === 'laravel') {
     return _routesLaravelStatic(ctx) || 'No `Route::` definitions found via static scan of `routes/` (and `php artisan route:list` was not run).\n';
   }
-  if (d.stacks.express || d.stacks.next || d.stacks.node) {
+  if (d.stacks.express || d.stacks.next) {
     const lines = filesUnder(ctx, d.controllersDir || d.sourceDir, '.ts')
       .concat(filesUnder(ctx, d.controllersDir || d.sourceDir, '.js'))
       .flatMap((f) => grepLines(readText(path.join(ctx.root, f)) || '', /\.(get|post|put|delete|patch)\s*\(/, 40))
@@ -1401,8 +1420,8 @@ function buildStages01to04(ctx) {
         },
         extraction: {
           'routes.md': routesMethod(ctx, routesContent),
-          'controllers.md': staticScanMethod(controllersContent),
-          'services.md': staticScanMethod(servicesContent),
+          'controllers.md': hasServerFramework(ctx.detection) ? staticScanMethod(controllersContent) : NOT_APPLICABLE_NO_SERVER_FRAMEWORK,
+          'services.md': hasServerFramework(ctx.detection) ? staticScanMethod(servicesContent) : NOT_APPLICABLE_NO_SERVER_FRAMEWORK,
           'api-spec.md': openApiRaw ? (ctx.aiOpenApi ? 'ai-summarized-openapi-spec' : 'raw-openapi-spec-excerpt') : 'unavailable',
         } };
     })(),
@@ -1413,6 +1432,7 @@ function buildStages01to04(ctx) {
 function staticScanMethod(content) { return content && content.trim() ? 'static-regex-scan' : 'unavailable (no scanner for this stack, or nothing matched)'; }
 function routesMethod(ctx, content) {
   const d = ctx.detection;
+  if (!hasServerFramework(d)) return NOT_APPLICABLE_NO_SERVER_FRAMEWORK;
   if (d.primaryFramework === 'symfony' || d.primaryFramework === 'laravel') {
     return content && content.includes('static scan')
       ? 'static-regex-fallback (live debug:router/route:list not attempted by this generator)'
@@ -1660,7 +1680,7 @@ module.exports = {
   DEFAULT_IGNORES, compileIgnorePatterns, createIgnoreMatcher, walkFiles, latestByBasename, detectStack, detectDevEnv,
   detectDatabases, extractVersions, findCandidateSubDirs, collectStackContext, aiDetermineStack, determineAppStack,
   buildContextBlock, injectContextReference, updateAiInstructionFiles,
-  schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock,
+  schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock, hasServerFramework,
   extractDomainNotes, annotateWithDomainNotes, dedupeGotchaHits, extractDeclaredFieldNames,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,

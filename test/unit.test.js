@@ -246,3 +246,12 @@ test('extractSqlStatements has no aggregate line cap — a statement far down a 
   const out = g.extractSqlStatements(sql, /CREATE TABLE/i);
   assert.match(out, /CREATE TABLE last_table \(\n  id INTEGER PRIMARY KEY,\n  note TEXT NOT NULL\n\);/, 'a statement past the old 120-line budget must still be captured whole, not sliced off');
 });
+
+test('hasServerFramework recognizes backend frameworks and rejects bare node/client-only stacks', () => {
+  const base = { stacks: { express: false, next: false, fastapi: false, flask: false, django: false, rails: false, go: false } };
+  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'node' }), false, 'bare node (e.g. Expo/React Native) has no server framework');
+  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'symfony' }), true);
+  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'laravel' }), true);
+  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'node', stacks: { ...base.stacks, express: true } }), true);
+  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'nextjs', stacks: { ...base.stacks, next: true } }), true);
+});

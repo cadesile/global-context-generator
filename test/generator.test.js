@@ -45,6 +45,28 @@ test('schema.md captures every CREATE TABLE in schema.sql in full, including a b
     'the last table in the file must not be sliced off by an aggregate line cap');
 });
 
+test('routes.md is marked not-applicable for a client-only stack instead of matching arbitrary client code', () => {
+  // Regression: for a stack with no server framework (a bare Expo/React
+  // Native app here), the old routes scanner ran an Express-style regex
+  // (`.get(`/`.post(`/etc.) over the whole source tree, matching things
+  // like `Map.get(...)` in unrelated client engine code as if they were
+  // route definitions. test/fixtures/expo-app/src/engine/leagueEngine.ts
+  // has exactly that shape (`clubLeagueMap.get(npcClubId)`) to prove it's
+  // no longer swept up.
+  const root = copyFixture('expo-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const routes = fs.readFileSync(path.join(root, '.context/stages/04_interfaces/output/routes.md'), 'utf8');
+  assert.match(routes, /Not applicable/);
+  assert.ok(!/clubLeagueMap/.test(routes), 'a client-side Map.get(...) call must not be scanned as if it were a route');
+  assert.ok(!/```js/.test(routes), 'no client-code snippet should be emitted at all for a stack with no server framework');
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, '.context/_config/manifest.json'), 'utf8'));
+  assert.strictEqual(manifest.stages['04_interfaces'].extraction['routes.md'], 'not-applicable (no server framework detected for this stack)');
+  assert.strictEqual(manifest.stages['04_interfaces'].extraction['controllers.md'], 'not-applicable (no server framework detected for this stack)');
+  assert.strictEqual(manifest.stages['04_interfaces'].extraction['services.md'], 'not-applicable (no server framework detected for this stack)');
+});
+
 test('ignore seed file is never overwritten', () => {
   const root = copyFixture('expo-app');
   fs.mkdirSync(path.join(root, '.context/_config'), { recursive: true });
