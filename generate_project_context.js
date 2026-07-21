@@ -1063,24 +1063,83 @@ function dedupeGotchaHits(hits) {
   }));
 }
 
+// Real declared property names for one entity's dumped fence block — used to
+// build the cross-entity field registry below. A backtick-quoted token in a
+// gotcha sentence (a type name, a generic type keyword like "json", a class
+// name) only counts as a scoping field name if it actually shows up here for
+// *some* entity; that's what lets the matcher tell "the field this gotcha is
+// about" apart from incidental vocabulary in the same sentence.
+function extractDeclaredFieldNames(fenceText) {
+  const names = new Set();
+  for (const m of fenceText.matchAll(/\$(\w+)/g)) names.add(m[1]); // PHP: private ... $field
+  for (const m of fenceText.matchAll(/^\s*(?:readonly\s+)?(\w+)\??\s*:/gm)) names.add(m[1]); // TS-style: field: Type
+  return names;
+}
+
 // Insert a note right after each `#### \`Name\`` heading the raw extractors
 // emit (see fileSection()), for *every* such heading — either the matching
 // domain note, or an explicit "none found" so absence reads as confirmed.
-// Also scans each entity's dumped field/property lines for gotchas whose
-// name matches a field declared in that same block, and attaches those
-// immediately after the code fence — closer to the specific field they
-// govern, not just the class as a whole.
+// Also attaches "Key Gotchas" field notes, scoped by which entity actually
+// declares the field(s) the gotcha names — not by loose keyword overlap
+// against the raw fence dump (see extractDeclaredFieldNames above for why
+// that distinction matters: two entities can share a field name, or a
+// sentence can mention a type/class name that happens to appear as a
+// substring in an unrelated entity's dump).
 function annotateWithDomainNotes(md, notes, gotchas = []) {
   if (!md) return md;
   const lines = md.split('\n');
+
+  // Pass 1: collect each entity's declared field names from its fence block.
+  const entityFields = new Map(); // entityName -> Set<fieldName>
+  {
+    let name = null, inFence = false, buf = [];
+    // flush() runs both when a fence closes (buf populated — the real data)
+    // and again at the next heading match (buf already drained to [] by
+    // then) — guard on buf.length so that second, empty call doesn't
+    // clobber the value the fence-close call just recorded.
+    const flush = () => { if (name && buf.length) entityFields.set(name, extractDeclaredFieldNames(buf.join('\n'))); buf = []; };
+    for (const line of lines) {
+      const h = line.match(/^#### `([^`]+)`$/);
+      if (h) { flush(); name = h[1]; continue; }
+      if (/^```/.test(line.trim())) { inFence = !inFence; if (!inFence) flush(); continue; }
+      if (inFence) buf.push(line);
+    }
+  }
+  // Global registry: which entities declare a given field name. A name with
+  // no owners here is never a real field — it's incidental sentence
+  // vocabulary (a type name, a keyword) and must not scope a gotcha to anyone.
+  const fieldOwners = new Map(); // fieldName -> Set<entityName>
+  for (const [entity, fields] of entityFields) {
+    for (const f of fields) {
+      if (!fieldOwners.has(f)) fieldOwners.set(f, new Set());
+      fieldOwners.get(f).add(entity);
+    }
+  }
+
+  // Pass 2: for each gotcha, keep only the names that are a genuine field
+  // somewhere, then require an entity to declare EVERY one of them — never
+  // a subset — before the gotcha is considered to be about that entity. A
+  // gotcha with zero genuine field names (e.g. about a service method, not
+  // an entity property) attaches to no entity at all.
+  const gotchaEntities = gotchas.map((g) => {
+    const scopingNames = g.names.filter((n) => fieldOwners.has(n));
+    if (!scopingNames.length) return new Set();
+    let candidates = null;
+    for (const n of scopingNames) {
+      const owners = fieldOwners.get(n);
+      candidates = candidates ? new Set([...candidates].filter((e) => owners.has(e))) : new Set(owners);
+    }
+    return candidates;
+  });
+
+  // Pass 3: render, using the per-entity gotcha membership from Pass 2.
   const out = [];
   let currentName = null;
   let inFence = false;
   let fenceBuf = [];
   const flushFence = () => {
     if (!currentName || !fenceBuf.length) return;
-    const fenceText = fenceBuf.join('\n');
-    const hits = gotchas.filter((g) => g.names.some((n) => new RegExp(`[$]?\\b${n}\\b`).test(fenceText)));
+    const hits = gotchas.filter((g, i) => gotchaEntities[i].has(currentName));
     for (const hit of dedupeGotchaHits(hits)) out.push('', `> **Field note:** ${hit.text}`);
     fenceBuf = [];
   };
@@ -1574,7 +1633,7 @@ module.exports = {
   detectDatabases, extractVersions, findCandidateSubDirs, collectStackContext, aiDetermineStack, determineAppStack,
   buildContextBlock, injectContextReference, updateAiInstructionFiles,
   schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock,
-  extractDomainNotes, annotateWithDomainNotes, dedupeGotchaHits,
+  extractDomainNotes, annotateWithDomainNotes, dedupeGotchaHits, extractDeclaredFieldNames,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,

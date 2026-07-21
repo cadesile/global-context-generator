@@ -212,3 +212,12 @@ test('dedupeGotchaHits keeps genuinely independent hits (no subset relationship)
   const dup2 = { names: ['a'], text: 'note about a' };
   assert.deepStrictEqual(g.dedupeGotchaHits([dup1, dup2]), [dup1]);
 });
+
+test('extractDeclaredFieldNames pulls real property names but not incidental type/keyword text', () => {
+  const php = 'private int $hallOfFamePoints;\n    #[ORM\\Column(type: \'json\')]\n    private array $appearance;\n';
+  const names = g.extractDeclaredFieldNames(php);
+  assert.ok(names.has('hallOfFamePoints'));
+  assert.ok(names.has('appearance'));
+  assert.ok(!names.has('json'), 'a type keyword must not be treated as a declared field name');
+  assert.ok(!names.has('ORM'), 'a decorator namespace must not be treated as a declared field name');
+});

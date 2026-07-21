@@ -295,6 +295,65 @@ test('overlapping "Key Gotchas" lines collapse into one Field note per entity, n
   }
 });
 
+test('Field notes only attach to entities that actually declare every field the note names (no keyword-overlap misattribution)', () => {
+  // Regression for a misattribution bug: the old matcher attached a gotcha to
+  // any entity sharing ANY one backtick-quoted token with the gotcha's
+  // source line — including generic type keywords ("json") and fields two
+  // unrelated entities merely happen to share a name with. Baz shares only
+  // `reputation` with Foo's 3-field gotcha (not hallOfFamePoints or
+  // totalCareerEarnings) and must get nothing. Qux shares the generic word
+  // "json" with the `appearance` gotcha but has no `appearance` field
+  // itself (only an unrelated `traitMapping` json column) and must get
+  // nothing. Widget genuinely declares `appearance` and must get the note.
+  // The spl_object_id()/array_unique() gotcha names no real entity field at
+  // all and must attach to nobody.
+  const root = copyFixture('symfony-app');
+  const r = runGenerator(root, ['--no-ai']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const entities = fs.readFileSync(path.join(root, '.context/stages/03_data/output/entities.md'), 'utf8');
+
+  const sections = new Map();
+  for (const section of entities.split(/(?=^#### )/m)) {
+    const nameMatch = section.match(/^#### `([^`]+)`/);
+    if (nameMatch) sections.set(nameMatch[1], section);
+  }
+
+  assert.strictEqual([...(sections.get('Baz').matchAll(/^> \*\*Field note:\*\*/gm))].length, 0,
+    'Baz shares only `reputation` with Foo\'s gotcha and must not get the whole 3-field note');
+  assert.strictEqual([...(sections.get('Qux').matchAll(/^> \*\*Field note:\*\*/gm))].length, 0,
+    'Qux shares only the generic word "json" with the appearance gotcha, not the `appearance` field itself, and must get nothing');
+  assert.match(sections.get('Widget'), /> \*\*Field note:\*\* `appearance` is a `json`\/array column/,
+    'Widget genuinely declares `appearance` and must get the note');
+  for (const [, section] of sections) {
+    assert.ok(!/spl_object_id/.test(section), 'a gotcha naming no real entity field must attach to no entity');
+  }
+
+  // General regression check: for every Field note anywhere in entities.md,
+  // every backtick-quoted name it mentions must be a field this entity's own
+  // code block actually declares — a stray quoted name proves misattribution.
+  for (const [name, section] of sections) {
+    const declaredFields = new Set([...section.matchAll(/\$(\w+)/g)].map((m) => m[1]));
+    for (const noteMatch of section.matchAll(/^> \*\*Field note:\*\* (.+)$/gm)) {
+      const quotedNames = [...noteMatch[1].matchAll(/`([A-Za-z_]\w*)`/g)].map((m) => m[1]);
+      // Not every quoted name in a note is necessarily a field (e.g. a form
+      // type class like AppearanceType) — but at least one must be, and none
+      // of the quoted names that ARE known fields elsewhere may be a field
+      // this entity itself lacks entirely (id is present on every fixture
+      // entity here, so it's excluded as an uninformative universal field).
+      const quotedFieldsThisEntityLacks = quotedNames.filter((n) => n !== 'id' && !declaredFields.has(n) && fieldIsDeclaredSomewhere(sections, n));
+      assert.deepStrictEqual(quotedFieldsThisEntityLacks, [],
+        `${name}'s Field note quotes field name(s) ${quotedFieldsThisEntityLacks.join(', ')} that ${name} does not declare — misattribution`);
+    }
+  }
+});
+
+function fieldIsDeclaredSomewhere(sections, fieldName) {
+  for (const [, section] of sections) {
+    if (new RegExp(`\\$${fieldName}\\b`).test(section)) return true;
+  }
+  return false;
+}
+
 test('the same CLAUDE.md merge covers 04_interfaces (services.md, controllers.md), not just 03_data', () => {
   const root = copyFixture('symfony-app');
   const r = runGenerator(root, ['--no-ai']);

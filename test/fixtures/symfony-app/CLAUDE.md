@@ -11,6 +11,8 @@
 - `hallOfFamePoints` is `max(current, incoming)` — never decreases. `reputation` floors at 0. `totalCareerEarnings` adds deltas.
 - `hallOfFamePoints` is `max(current, incoming)` — never decreases.
 - `reputation` floors at 0. `totalCareerEarnings` accumulates deltas.
+- `appearance` is a `json`/array column that uses a custom EasyAdmin form type (`AppearanceType`).
+- Pool dedup uses `spl_object_id()`, not `array_unique()`.
 
 ## Key Services
 
