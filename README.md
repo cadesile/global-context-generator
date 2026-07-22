@@ -9,7 +9,7 @@ Based on the Interpretable Context Methodology (https://arxiv.org/html/2603.1602
 
 - Node.js >= 18 (no npm dependencies)
 - git _(optional — enables git activity + AI focus sections)_
-- Claude CLI or Gemini CLI _(optional — enables AI summaries and stack disambiguation)_
+- Claude CLI or Gemini CLI — **required**. This generator's schema/entity/route/controller/service extraction is entirely AI-driven; there is no static-regex fallback.
 
 ## Installation
 
@@ -27,12 +27,11 @@ chmod +x /usr/local/bin/generate_project_context
 ## Usage
 
 ```bash
-node generate_project_context.js [--no-ai] [--ai <claude|gemini>] [--context-dir <dir>] [--depth <n>] [--dir <path>] [--debug-detection]
+node generate_project_context.js [--ai <claude|gemini>] [--context-dir <dir>] [--depth <n>] [--dir <path>] [--debug-detection]
 ```
 
 | Flag | Description | Default |
 |---|---|---|
-| `--no-ai` | Skip all AI calls, static extraction only | AI enabled |
 | `--ai <claude\|gemini>` | Choose which AI CLI to use | `claude` |
 | `--context-dir <dir>` | Directory to write the context tree into | `.context` |
 | `--depth <n>` | Directory tree depth | `3` |
@@ -90,9 +89,6 @@ parsed, keyed by repo-relative path:
 
 - **sha256 skip** — if a file's hash and its existing digest/summary output are
   unchanged since the last run, it's skipped (no re-parse, no AI call).
-- **AI upgrade** — a file previously parsed with `--no-ai` gets re-parsed and
-  upgraded to an AI summary the next time AI is available, even if its content
-  hasn't changed.
 - **Deletion cleanup** — files removed from the repo since the last run are
   dropped from the ledger and their digest/summary output is deleted.
 - **Manifest written last** — `manifest.json` is only written after every
@@ -115,9 +111,6 @@ tool — answer the questions yourself (e.g. by adding them to
 CLAUDE.md/AGENTS.md, which the generator already merges into
 `entities.md`/`services.md` on the next run) or file them as tickets.
 
-Under `--no-ai` (or with no AI CLI on PATH), this step is skipped entirely:
-`KNOWLEDGE_GAPS.md` is not created, and the router has no pointer to it.
-
 ## Ignore rules
 
 Three layers apply in order, each adding to the last:
@@ -133,20 +126,29 @@ Patterns use gitignore-style syntax (comments, blank lines, `*`/`?`/`**`
 globs, trailing `/` for directories, leading `/` to anchor at the repo root).
 **Negation (`!`) is not supported** and such lines are ignored.
 
-## Supported stacks
+## Schema/entity/route/controller/service extraction
 
-| Stack | Schema | Entities | State |
-|---|---|---|---|
-| Symfony | Doctrine migrations + entity columns | `#[ORM]` property map | — |
-| Laravel | `database/migrations` + field chains | Eloquent `$fillable`, casts, relations | — |
-| Next.js / Express / Node | SQL/`.sql` files or `schema.ts` | TypeScript interfaces & types | Zustand store shapes |
-| Django | Latest migrations | `models.py` class + field definitions | — |
-| Rails | `db/schema.rb` | ActiveRecord associations + validations | — |
-| Go | Struct definitions | Type definitions | — |
+`schema.md`, `entities.md`, `state.md`, `routes.md`, `controllers.md`, and
+`services.md` are produced by a two-pass AI process, not per-framework
+static extraction — this works on any stack (including ones with no known
+MVC convention, like WordPress) since it reasons from the codebase's
+structure rather than a fixed enum of framework layouts:
 
-Framework-specific stacks (Symfony, Laravel, Django, etc.) always take priority
-over a generic Node detection so that projects with frontend tooling (`webpack`,
-`vite`, etc.) alongside a backend framework are classified correctly.
+1. **Discovery** (1 AI call): the generator shows the AI the directory tree
+   and manifest file, and asks which paths define the data model, routes,
+   business logic, and client-side state.
+2. **Generation** (up to 6 AI calls, one per output file): each file's
+   content is generated from the paths discovery named for its category. If
+   the file already exists from a previous run, the AI is asked to update
+   it — keeping what's still accurate, adding what's new — rather than
+   regenerating from scratch.
+
+Generation results are cached per file in `_config/manifest.json`: a rerun
+skips the AI call and reuses the existing file when the underlying source
+hasn't changed AND the last review was within 30 days; otherwise it
+re-reviews. Stack/dev-env/DB detection, the directory tree, git activity,
+and file counts stay fully deterministic (no AI involved) — only the six
+files above require an AI CLI to be populated.
 
 ## For agents
 
