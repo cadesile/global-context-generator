@@ -255,3 +255,58 @@ test('hasServerFramework recognizes backend frameworks and rejects bare node/cli
   assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'node', stacks: { ...base.stacks, express: true } }), true);
   assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'nextjs', stacks: { ...base.stacks, next: true } }), true);
 });
+
+test('collectCategoryContent concatenates file contents with path headers, budgeted', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-content-'));
+  fs.writeFileSync(path.join(tmp, 'a.php'), 'class A {}');
+  fs.writeFileSync(path.join(tmp, 'b.php'), 'class B {}');
+  const out = g.collectCategoryContent(tmp, ['a.php', 'b.php'], 12000);
+  assert.match(out, /### a\.php\n```\nclass A \{\}\n```/);
+  assert.match(out, /### b\.php\n```\nclass B \{\}\n```/);
+});
+
+test('collectCategoryContent truncates once the budget is exhausted, skipping later files', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-content-budget-'));
+  fs.writeFileSync(path.join(tmp, 'big.php'), 'X'.repeat(200));
+  fs.writeFileSync(path.join(tmp, 'never-reached.php'), 'class Never {}');
+  const out = g.collectCategoryContent(tmp, ['big.php', 'never-reached.php'], 50);
+  assert.ok(!out.includes('X'.repeat(200)), 'big.php content must be truncated, not included in full');
+  assert.ok(!out.includes('Never'), 'never-reached.php must not be included once the budget is exhausted');
+});
+
+test('computeCategoryHash is stable for the same content regardless of path order', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-hash-'));
+  fs.writeFileSync(path.join(tmp, 'a.php'), 'class A {}');
+  fs.writeFileSync(path.join(tmp, 'b.php'), 'class B {}');
+  const h1 = g.computeCategoryHash(tmp, ['a.php', 'b.php']);
+  const h2 = g.computeCategoryHash(tmp, ['b.php', 'a.php']);
+  assert.strictEqual(h1, h2, 'hash must not depend on path array order');
+
+  fs.writeFileSync(path.join(tmp, 'a.php'), 'class A { public $changed; }');
+  const h3 = g.computeCategoryHash(tmp, ['a.php', 'b.php']);
+  assert.notStrictEqual(h1, h3, 'hash must change when file content changes');
+});
+
+test('isCacheFresh requires both matching hash and last review within 30 days', () => {
+  const now = new Date('2026-07-22T00:00:00Z');
+  const fresh = { source_hash: 'abc', last_reviewed_at: '2026-07-01T00:00:00Z' };
+  assert.strictEqual(g.isCacheFresh(fresh, 'abc', now), true, 'matching hash, 21 days old — still fresh');
+
+  const stale = { source_hash: 'abc', last_reviewed_at: '2026-06-01T00:00:00Z' };
+  assert.strictEqual(g.isCacheFresh(stale, 'abc', now), false, 'matching hash but 51 days old — stale, must re-review');
+
+  const changed = { source_hash: 'abc', last_reviewed_at: '2026-07-21T00:00:00Z' };
+  assert.strictEqual(g.isCacheFresh(changed, 'xyz', now), false, 'hash mismatch — never fresh regardless of age');
+
+  assert.strictEqual(g.isCacheFresh(null, 'abc', now), false, 'no prior cache entry — never fresh');
+  assert.strictEqual(g.isCacheFresh(undefined, 'abc', now), false);
+});

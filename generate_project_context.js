@@ -939,6 +939,33 @@ function collectReviewContext(root, contextDir, stageIndex, budget = 12000) {
   return out;
 }
 
+// ── AI-driven extraction: pass-2 shared building blocks ──────────────────────
+// See docs/superpowers/specs/2026-07-22-ai-driven-extraction-design.md.
+function collectCategoryContent(root, paths, budget = 12000) {
+  let out = '';
+  for (const p of paths) {
+    if (out.length >= budget) break;
+    const content = readText(path.join(root, p));
+    if (!content) continue;
+    const remaining = budget - out.length;
+    out += `### ${p}\n\`\`\`\n${content.slice(0, remaining)}\n\`\`\`\n\n`;
+  }
+  return out;
+}
+
+function computeCategoryHash(root, paths) {
+  const sorted = [...paths].sort();
+  const combined = sorted.map((p) => `${p}:${readText(path.join(root, p)) || ''}`).join('\n---\n');
+  return sha256(combined);
+}
+
+const AI_REVIEW_STALENESS_DAYS = 30;
+function isCacheFresh(cacheEntry, currentHash, now = new Date()) {
+  if (!cacheEntry || cacheEntry.source_hash !== currentHash) return false;
+  const ageMs = now.getTime() - new Date(cacheEntry.last_reviewed_at).getTime();
+  return ageMs < AI_REVIEW_STALENESS_DAYS * 24 * 60 * 60 * 1000;
+}
+
 // Port of bash lines 311–339: sample key project files into a char-budgeted block.
 function collectAiContextFiles(ctx) {
   let out = '';
@@ -1693,5 +1720,6 @@ module.exports = {
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
   checkAiAvailable, callAi, stripModelPreamble, collectAiContextFiles, collectReviewContext, makeAiSummarizer,
+  collectCategoryContent, computeCategoryHash, isCacheFresh, AI_REVIEW_STALENESS_DAYS,
 };
 if (require.main === module) main();
