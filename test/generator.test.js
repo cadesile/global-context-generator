@@ -473,3 +473,20 @@ test('03_data (schema/entities/state) is generated via AI discovery, not per-fra
   const manifest = JSON.parse(fs.readFileSync(path.join(root, '.context/_config/manifest.json'), 'utf8'));
   assert.strictEqual(manifest.stages['03_data'].extraction['schema.md'], 'ai-generated');
 });
+
+test('fake-ai.js responds distinctly to discovery and all 6 generation prompt shapes for the symfony fixture', () => {
+  const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const ctxDir = path.join(root, '.context');
+  const schema = fs.readFileSync(path.join(ctxDir, 'stages/03_data/output/schema.md'), 'utf8');
+  const entities = fs.readFileSync(path.join(ctxDir, 'stages/03_data/output/entities.md'), 'utf8');
+  const routes = fs.readFileSync(path.join(ctxDir, 'stages/04_interfaces/output/routes.md'), 'utf8');
+  const controllers = fs.readFileSync(path.join(ctxDir, 'stages/04_interfaces/output/controllers.md'), 'utf8');
+  assert.match(schema, /#### `Foo`/);
+  assert.match(entities, /#### `Foo`/);
+  assert.match(entities, /#### `Bar`/);
+  assert.match(routes, /Method \| Path \| Handler/);
+  assert.match(controllers, /#### `FooController`/);
+});
