@@ -437,6 +437,71 @@ test('03_data (schema/entities/state) is generated via AI discovery, not per-fra
   assert.strictEqual(manifest.stages['03_data'].extraction['schema.md'], 'ai-generated');
 });
 
+test('repeated cached/revised reruns do not double-wrap output (Finding 1: no compounding H1s or domain notes)', () => {
+  // Regression for the final whole-branch review's Critical finding: a
+  // rendered output file's H1 wrapper and annotateWithDomainNotes' injected
+  // notes must never be fed back into runGenerationCall as "existingContent"
+  // un-stripped, or every cached/revised rerun re-wraps/re-annotates content
+  // that already has it, compounding without bound. Run 3 times unchanged
+  // (fake-ai.js and the source are both deterministic, so isCacheFresh is
+  // true from run 2 onward) and assert nothing accumulates.
+  const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  for (let i = 0; i < 3; i++) {
+    const r = runGenerator(root, ['--ai', fakeAi]);
+    assert.strictEqual(r.status, 0, r.stderr);
+  }
+  const schema = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
+  const entities = fs.readFileSync(path.join(root, '.context/stages/03_data/output/entities.md'), 'utf8');
+
+  const h1Count = (content) => (content.match(/^# /gm) || []).length;
+  assert.strictEqual(h1Count(schema), 1, 'schema.md must have exactly one H1 after 3 reruns, not one per run');
+  assert.strictEqual(h1Count(entities), 1, 'entities.md must have exactly one H1 after 3 reruns, not one per run');
+
+  const countOccurrences = (content, re) => (content.match(re) || []).length;
+  assert.strictEqual(
+    countOccurrences(entities, /Tracks a foo and its hall-of-fame point total\./g), 1,
+    'Foo\'s Purpose note must appear exactly once, not once per rerun',
+  );
+  // Bar is one of five entities with no hand-written notes (Bar/Baz/Qux/Widget
+  // all lack them), so the marker legitimately appears 4 times total — scope
+  // to Bar's own section specifically to catch per-entity duplication.
+  const barSection = entities.split(/(?=^#### )/m).find((s) => /^#### `Bar`/.test(s));
+  assert.strictEqual(
+    countOccurrences(barSection, /No hand-written notes found in CLAUDE\.md\/AGENTS\.md\/README\.md for this name\./g), 1,
+    'Bar\'s "no notes found" marker must appear exactly once, not once per rerun',
+  );
+  assert.strictEqual(
+    countOccurrences(entities, /never decreases\. `reputation` floors at 0\. `totalCareerEarnings` adds deltas\./g), 1,
+    'Foo\'s Field note must appear exactly once, not once per rerun',
+  );
+});
+
+test('a deleted output file is regenerated on rerun even while its cache would otherwise read as fresh (Finding 2)', () => {
+  // Regression for the final whole-branch review's Important finding:
+  // isCacheFresh only checks source_hash + review age, never whether the
+  // cached output file still exists on disk. Deleting schema.md and rerunning
+  // with an unchanged source must force regeneration (ai-generated), not
+  // silently leave the file missing while the manifest still claims
+  // ai-cached about a file that isn't there.
+  const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r1 = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r1.status, 0, r1.stderr);
+  const schemaPath = path.join(root, '.context/stages/03_data/output/schema.md');
+  assert.ok(fs.existsSync(schemaPath), 'sanity: schema.md exists after first run');
+  fs.rmSync(schemaPath);
+
+  const r2 = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r2.status, 0, r2.stderr);
+  assert.ok(fs.existsSync(schemaPath), 'schema.md must be regenerated, not left missing, even though the source is unchanged');
+  assert.match(fs.readFileSync(schemaPath, 'utf8'), /#### `Foo`/);
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, '.context/_config/manifest.json'), 'utf8'));
+  assert.strictEqual(manifest.stages['03_data'].extraction['schema.md'], 'ai-generated',
+    'a regenerated file must be labeled ai-generated, not a stale ai-cached claim about a file that was missing');
+});
+
 test('fake-ai.js responds distinctly to discovery and all 6 generation prompt shapes for the symfony fixture', () => {
   const root = copyFixture('symfony-app');
   const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');

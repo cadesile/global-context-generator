@@ -689,7 +689,12 @@ function runGenerationCall(ctx, { paths, promptInstructions, existingContent, ol
   }
   const sourceHash = computeCategoryHash(ctx.root, paths);
   const now = new Date();
-  if (isCacheFresh(oldCacheEntry, sourceHash, now)) {
+  // A fresh cache entry only means "the source hasn't changed" — it says
+  // nothing about whether the output file it describes still exists on disk.
+  // If existingContent is missing (e.g. the user deleted schema.md), there is
+  // nothing to reuse, so force regeneration regardless of hash/staleness
+  // rather than returning '' while still claiming ai-cached (Finding 2).
+  if (existingContent && isCacheFresh(oldCacheEntry, sourceHash, now)) {
     return { content: existingContent || '', method: `ai-cached (last reviewed ${oldCacheEntry.last_reviewed_at.slice(0, 10)})`, cacheEntry: oldCacheEntry };
   }
   const fileContent = collectCategoryContent(ctx.root, paths);
@@ -1081,6 +1086,41 @@ function writeStage(root, contextDir, stageName, contract, outputs) {
   return written;
 }
 
+function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Strips this stage's deterministic post-processing back out of a previously
+// rendered output file: the leading "# Title" heading buildStages01to04 adds,
+// and the "> **Purpose:** ...", "> _No hand-written notes found..._", and
+// "> **Field note:** ..." lines annotateWithDomainNotes injects. These are
+// rendering-layer additions — re-derived from CLAUDE.md/the wrapper on every
+// run regardless of what the AI produces — never something the AI authored
+// or should be asked to "keep as accurate existing content". Used to sanitize
+// ctx.existingOutputs before it's ever passed to runGenerationCall, so a
+// cache-hit return or a revise-prompt round-trip can't re-wrap/re-annotate
+// content that already has the wrapper/annotations applied (see Finding 1 of
+// the final whole-branch review: without this, every cached/revised rerun
+// compounded the H1 and notes without bound).
+function stripGeneratedWrapper(renderedContent, h1Title) {
+  if (!renderedContent) return renderedContent;
+  let out = renderedContent;
+  // Drop the leading "# Title" heading and any blank lines right after it.
+  const h1Re = new RegExp(`^# ${escapeRegExp(h1Title)}\\n+`);
+  out = out.replace(h1Re, '');
+  // Drop the exact line-shapes annotateWithDomainNotes injects (see its
+  // implementation above — these three are the ONLY things it ever adds).
+  out = out
+    .split('\n')
+    .filter((line) =>
+      !/^> \*\*Purpose:\*\* /.test(line) &&
+      line !== '> _No hand-written notes found in CLAUDE.md/AGENTS.md/README.md for this name._' &&
+      !/^> \*\*Field note:\*\* /.test(line))
+    .join('\n');
+  // Collapse any run of 2+ blank lines the removals above left behind, so
+  // repeated strip/re-annotate cycles don't accumulate whitespace either.
+  out = out.replace(/\n{3,}/g, '\n\n');
+  return out;
+}
+
 // ── Markdown digests + ledger (stage 05) ─────────────────────────────────────
 function slugForPath(rel) {
   return rel.replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -1392,9 +1432,24 @@ async function main() {
     '04_interfaces': (priorManifest.stages['04_interfaces'] && priorManifest.stages['04_interfaces'].ai_cache) || {},
   };
   const readExisting = (stageName, file) => readText(path.join(root, args.contextDir, 'stages', stageName, 'output', file));
+  // Strip each file's deterministic wrapper (H1 heading) and injected domain
+  // notes back out before it's ever used as existingContent — see
+  // stripGeneratedWrapper for why: the rendered-on-disk file already has both
+  // applied, and buildStages01to04 will unconditionally re-apply them to
+  // whatever runGenerationCall returns, so feeding it back in un-stripped
+  // would double (then triple, ...) them across runs.
+  const dataLabels = sectionLabels(ctx.detection, ctx.dbHints);
   ctx.existingOutputs = {
-    '03_data': { 'schema.md': readExisting('03_data', 'schema.md'), 'entities.md': readExisting('03_data', 'entities.md'), 'state.md': readExisting('03_data', 'state.md') },
-    '04_interfaces': { 'routes.md': readExisting('04_interfaces', 'routes.md'), 'controllers.md': readExisting('04_interfaces', 'controllers.md'), 'services.md': readExisting('04_interfaces', 'services.md') },
+    '03_data': {
+      'schema.md': stripGeneratedWrapper(readExisting('03_data', 'schema.md'), dataLabels.schema),
+      'entities.md': stripGeneratedWrapper(readExisting('03_data', 'entities.md'), dataLabels.entities),
+      'state.md': stripGeneratedWrapper(readExisting('03_data', 'state.md'), dataLabels.state),
+    },
+    '04_interfaces': {
+      'routes.md': stripGeneratedWrapper(readExisting('04_interfaces', 'routes.md'), 'API Routes'),
+      'controllers.md': stripGeneratedWrapper(readExisting('04_interfaces', 'controllers.md'), 'Controllers'),
+      'services.md': stripGeneratedWrapper(readExisting('04_interfaces', 'services.md'), 'Services'),
+    },
   };
 
   log.info(`Calling ${args.aiCli} — discovering data-model/routes/business-logic/state paths...`);
