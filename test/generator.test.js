@@ -5,9 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { copyFixture, runGenerator } = require('./helpers.js');
 
-test('full run creates ICM skeleton with contracts (expo, no-ai)', () => {
+test('full run creates ICM skeleton with contracts (expo)', () => {
   const root = copyFixture('expo-app');
-  const r = runGenerator(root, ['--no-ai']);
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r.status, 0, r.stderr);
   const ctx = path.join(root, '.context');
   assert.ok(fs.existsSync(path.join(ctx, 'CONTEXT.md')));
@@ -28,58 +29,20 @@ test('full run creates ICM skeleton with contracts (expo, no-ai)', () => {
   assert.match(router, /Interpretable Context Methodology|ICM/);
 });
 
-test('schema.md captures every CREATE TABLE in schema.sql in full, including a braced DEFAULT and a table far down a long file', () => {
-  // Regression: the sqlite schema scanner used to reuse a brace-balanced
-  // extractor built for TS/Go blocks. A `DEFAULT '{}'` value tripped its
-  // brace counter and truncated that table early, and its aggregate
-  // 120-line cap sliced off whichever table fell across that budget,
-  // regardless of statement boundaries. test/fixtures/expo-app's schema.sql
-  // has 19 tables (>120 lines once rendered) specifically to cover both:
-  // `settings` has a `{}` default, `zzz_last_table` is the last one.
-  const root = copyFixture('expo-app');
-  const r = runGenerator(root, ['--no-ai']);
-  assert.strictEqual(r.status, 0, r.stderr);
-  const schema = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
-  assert.match(schema, /CREATE TABLE settings \(\n {2}id INTEGER PRIMARY KEY,\n {2}data TEXT NOT NULL DEFAULT '\{\}',\n {2}updated_at TEXT NOT NULL DEFAULT \(datetime\('now'\)\)\n\);/,
-    'settings must be captured whole, including its closing `);`, despite the `{}` default value');
-  assert.match(schema, /CREATE TABLE zzz_last_table \(\n {2}id INTEGER PRIMARY KEY,\n {2}note TEXT NOT NULL\n\);/,
-    'the last table in the file must not be sliced off by an aggregate line cap');
-});
-
-test('routes.md is marked not-applicable for a client-only stack instead of matching arbitrary client code', () => {
-  // Regression: for a stack with no server framework (a bare Expo/React
-  // Native app here), the old routes scanner ran an Express-style regex
-  // (`.get(`/`.post(`/etc.) over the whole source tree, matching things
-  // like `Map.get(...)` in unrelated client engine code as if they were
-  // route definitions. test/fixtures/expo-app/src/engine/leagueEngine.ts
-  // has exactly that shape (`clubLeagueMap.get(npcClubId)`) to prove it's
-  // no longer swept up.
-  const root = copyFixture('expo-app');
-  const r = runGenerator(root, ['--no-ai']);
-  assert.strictEqual(r.status, 0, r.stderr);
-  const routes = fs.readFileSync(path.join(root, '.context/stages/04_interfaces/output/routes.md'), 'utf8');
-  assert.match(routes, /Not applicable/);
-  assert.ok(!/clubLeagueMap/.test(routes), 'a client-side Map.get(...) call must not be scanned as if it were a route');
-  assert.ok(!/```js/.test(routes), 'no client-code snippet should be emitted at all for a stack with no server framework');
-
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, '.context/_config/manifest.json'), 'utf8'));
-  assert.strictEqual(manifest.stages['04_interfaces'].extraction['routes.md'], 'not-applicable (no server framework detected for this stack)');
-  assert.strictEqual(manifest.stages['04_interfaces'].extraction['controllers.md'], 'not-applicable (no server framework detected for this stack)');
-  assert.strictEqual(manifest.stages['04_interfaces'].extraction['services.md'], 'not-applicable (no server framework detected for this stack)');
-});
-
 test('ignore seed file is never overwritten', () => {
   const root = copyFixture('expo-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
   fs.mkdirSync(path.join(root, '.context/_config'), { recursive: true });
   fs.writeFileSync(path.join(root, '.context/_config/ignore'), '# custom\nmy-dir/\n');
-  const r = runGenerator(root, ['--no-ai']);
+  const r = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(fs.readFileSync(path.join(root, '.context/_config/ignore'), 'utf8'), '# custom\nmy-dir/\n');
 });
 
 test('stage 05 indexes docs, excludes vendored md, and ledger skips unchanged files', () => {
   const root = copyFixture('expo-app');
-  const r1 = runGenerator(root, ['--no-ai']);
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r1 = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r1.status, 0, r1.stderr);
   const ctxDir = path.join(root, '.context');
   const index = fs.readFileSync(path.join(ctxDir, 'stages/05_documentation/output/index.md'), 'utf8');
@@ -91,13 +54,13 @@ test('stage 05 indexes docs, excludes vendored md, and ledger skips unchanged fi
   assert.ok(fs.existsSync(path.join(sumDir, 'docs-architecture.md')));
   const m1 = JSON.parse(fs.readFileSync(path.join(ctxDir, '_config/manifest.json'), 'utf8'));
   const t1 = m1.parsed_markdown['README.md'].parsed_at;
-  assert.strictEqual(m1.parsed_markdown['README.md'].ai_summarized, false);
+  assert.strictEqual(m1.parsed_markdown['README.md'].ai_summarized, true, 'AI is mandatory now, so every parsed markdown file is AI-summarized');
 
   // Second run: unchanged files keep parsed_at; changed file re-parses; deleted file cleaned up.
   fs.appendFileSync(path.join(root, 'docs/architecture.md'), '\n## New section\n');
   fs.rmSync(path.join(root, 'README.md'));
   fs.writeFileSync(path.join(root, 'docs/new.md'), '# New Doc\n');
-  const r2 = runGenerator(root, ['--no-ai']);
+  const r2 = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r2.status, 0, r2.stderr);
   const m2 = JSON.parse(fs.readFileSync(path.join(ctxDir, '_config/manifest.json'), 'utf8'));
   assert.strictEqual(m2.parsed_markdown['docs/architecture.md'].sha256 === m1.parsed_markdown['docs/architecture.md'].sha256, false);
@@ -109,69 +72,60 @@ test('stage 05 indexes docs, excludes vendored md, and ledger skips unchanged fi
   assert.strictEqual(m2.parsed_markdown['docs/stable.md'].parsed_at, m1.parsed_markdown['docs/stable.md'].parsed_at);
 });
 
-test('fake AI CLI: stage 06 outputs and md summaries with upgrade on re-run', () => {
-  const root = copyFixture('expo-app');
-  const os = require('node:os');
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'icm-bin-'));
-  const fake = path.join(binDir, 'claude');
-  fs.writeFileSync(fake, '#!/bin/sh\necho "FAKE_AI_OUTPUT"\n');
-  fs.chmodSync(fake, 0o755);
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
-  delete env.CLAUDECODE;
-  const { spawnSync } = require('node:child_process');
-  const SCRIPT = path.join(__dirname, '..', 'generate_project_context.js');
-
-  // First run without AI, then with AI: ledger must upgrade ai_summarized files.
-  let r = spawnSync(process.execPath, [SCRIPT, '--no-ai'], { cwd: root, encoding: 'utf8', env });
-  assert.strictEqual(r.status, 0, r.stderr);
-  r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env });
-  assert.strictEqual(r.status, 0, r.stderr);
-  const ctxDir = path.join(root, '.context');
-  assert.match(fs.readFileSync(path.join(ctxDir, 'stages/06_synthesis/output/overview.md'), 'utf8'), /FAKE_AI_OUTPUT/);
-  assert.match(fs.readFileSync(path.join(ctxDir, 'stages/05_documentation/output/summaries/readme.md'), 'utf8'), /FAKE_AI_OUTPUT/);
-  const m = JSON.parse(fs.readFileSync(path.join(ctxDir, '_config/manifest.json'), 'utf8'));
-  assert.strictEqual(m.parsed_markdown['README.md'].ai_summarized, true);
-
-  // Third run, AI still on PATH: unchanged files must be skipped (ledger seam closed) —
-  // parsed_at for README.md must NOT change since it's already ai_summarized.
-  const readmeParsedAt2 = m.parsed_markdown['README.md'].parsed_at;
-  r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env });
-  assert.strictEqual(r.status, 0, r.stderr);
-  const m3 = JSON.parse(fs.readFileSync(path.join(ctxDir, '_config/manifest.json'), 'utf8'));
-  assert.strictEqual(m3.parsed_markdown['README.md'].parsed_at, readmeParsedAt2);
-});
-
-test('no-ai run marks stage 06 as not executed', () => {
-  const root = copyFixture('expo-app');
-  const r = runGenerator(root, ['--no-ai']);
-  assert.strictEqual(r.status, 0, r.stderr);
-  const contract = fs.readFileSync(path.join(root, '.context/stages/06_synthesis/CONTEXT.md'), 'utf8');
-  assert.match(contract, /not executed/i);
-});
-
-test('default flags without AI CLI on PATH: second run still skips via ledger', () => {
-  const os = require('node:os');
+test('exits 1 with no writes when no AI CLI is on PATH', () => {
   const { spawnSync } = require('node:child_process');
   const root = copyFixture('expo-app');
   const SCRIPT = path.join(__dirname, '..', 'generate_project_context.js');
   const env = { ...process.env, PATH: '/usr/bin:/bin' };
   delete env.CLAUDECODE;
-  let r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env });
+  const r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /an AI CLI is required/);
+  assert.ok(!fs.existsSync(path.join(root, '.context')), 'no writes when the AI gate fails');
+});
+
+test('--debug-detection still works with no AI CLI on PATH at all (deliberately AI-optional)', () => {
+  const { spawnSync } = require('node:child_process');
+  const root = copyFixture('expo-app');
+  const SCRIPT = path.join(__dirname, '..', 'generate_project_context.js');
+  const env = { ...process.env, PATH: '/usr/bin:/bin' };
+  delete env.CLAUDECODE;
+  const r = spawnSync(process.execPath, [SCRIPT, '--debug-detection'], { cwd: root, encoding: 'utf8', env });
   assert.strictEqual(r.status, 0, r.stderr);
-  const manifestPath = path.join(root, '.context/_config/manifest.json');
-  const m1 = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  assert.strictEqual(m1.parsed_markdown['README.md'].ai_summarized, false);
-  r = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env });
+  const parsed = JSON.parse(r.stdout);
+  assert.strictEqual(parsed.detection.primaryLang, 'node');
+  assert.ok(!fs.existsSync(path.join(root, '.context')));
+});
+
+test('router and manifest stamp generator commit and AI-driven extraction provenance', () => {
+  const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r.status, 0, r.stderr);
-  const m2 = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  assert.strictEqual(m2.parsed_markdown['README.md'].parsed_at, m1.parsed_markdown['README.md'].parsed_at,
-    'second default-flag run without AI CLI must skip unchanged files');
-  assert.match(r.stderr, /0 parsed/);
+  const router = fs.readFileSync(path.join(root, '.context/CONTEXT.md'), 'utf8');
+  assert.match(router, /Generator: v[\d.]+ \([0-9a-f]{7,}|unknown\)/);
+  assert.match(router, /## Extraction provenance/);
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, '.context/_config/manifest.json'), 'utf8'));
+  assert.match(manifest.generator_commit, /^[0-9a-f]{7,}$|^unknown$/);
+  assert.strictEqual(manifest.stages['03_data'].extraction['schema.md'], 'ai-generated');
+  assert.strictEqual(manifest.stages['04_interfaces'].extraction['routes.md'], 'ai-generated');
+});
+
+test('a second run with no source changes reuses cached AI generation (ai-cached)', () => {
+  const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r1 = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r1.status, 0, r1.stderr);
+  const r2 = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r2.status, 0, r2.stderr);
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, '.context/_config/manifest.json'), 'utf8'));
+  assert.match(manifest.stages['03_data'].extraction['schema.md'], /^ai-cached \(last reviewed \d{4}-\d{2}-\d{2}\)$/);
 });
 
 test('laravel fixture full run', () => {
   const root = copyFixture('laravel-app');
-  const r = runGenerator(root, ['--no-ai']);
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.match(fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8'), /create_users_table/);
   assert.match(fs.readFileSync(path.join(root, '.context/stages/03_data/output/entities.md'), 'utf8'), /\$fillable/);
@@ -180,7 +134,7 @@ test('laravel fixture full run', () => {
 
 test('--debug-detection prints JSON and writes nothing', () => {
   const root = copyFixture('expo-app');
-  const r = runGenerator(root, ['--no-ai', '--debug-detection']);
+  const r = runGenerator(root, ['--debug-detection']);
   assert.strictEqual(r.status, 0, r.stderr);
   const parsed = JSON.parse(r.stdout);
   assert.strictEqual(parsed.detection.primaryLang, 'node');
@@ -190,7 +144,8 @@ test('--debug-detection prints JSON and writes nothing', () => {
 
 test('nested --context-dir produces correct index link depth', () => {
   const root = copyFixture('expo-app');
-  const r = runGenerator(root, ['--no-ai', '--context-dir', 'docs/ctx']);
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi, '--context-dir', 'docs/ctx']);
   assert.strictEqual(r.status, 0, r.stderr);
   const index = fs.readFileSync(path.join(root, 'docs/ctx/stages/05_documentation/output/index.md'), 'utf8');
   assert.match(index, /\]\(\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/README\.md\)/, 'root README needs five ../ from a two-segment context dir');
@@ -198,9 +153,10 @@ test('nested --context-dir produces correct index link depth', () => {
 
 test('--dir targets another project from a different cwd', () => {
   const os = require('node:os');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
   const target = copyFixture('expo-app');
   const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'icm-elsewhere-'));
-  const r = runGenerator(elsewhere, ['--no-ai', '--dir', target]);
+  const r = runGenerator(elsewhere, ['--ai', fakeAi, '--dir', target]);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.ok(fs.existsSync(path.join(target, '.context/CONTEXT.md')), '.context created in target');
   assert.ok(!fs.existsSync(path.join(elsewhere, '.context')), 'nothing written to cwd');
@@ -209,7 +165,7 @@ test('--dir targets another project from a different cwd', () => {
 test('--dir with missing path exits 1 without writes', () => {
   const os = require('node:os');
   const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'icm-elsewhere2-'));
-  const r = runGenerator(elsewhere, ['--no-ai', '--dir', path.join(elsewhere, 'nope')]);
+  const r = runGenerator(elsewhere, ['--dir', path.join(elsewhere, 'nope')]);
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /Directory not found/);
   assert.ok(!fs.existsSync(path.join(elsewhere, '.context')), 'no writes on failure');
@@ -219,28 +175,35 @@ function addMigration(root, name, sql) {
   fs.writeFileSync(path.join(root, 'migrations', `${name}.php`), `<?php\nnamespace DoctrineMigrations;\nfinal class ${name} {\n    public function up(): void {\n        $this->addSql('${sql}');\n    }\n}\n`);
 }
 
-test('schema.md reflects newly added migrations after a rerun, not stale ones', () => {
+test('migrations.md reflects newly added migrations after a rerun, not stale ones', () => {
+  // Note: this test used to read schema.md, back when schema.md was built by
+  // deterministically scanning migration SQL bodies. Under the AI-driven
+  // redesign, schema.md now comes from AI generation and migrations.md is the
+  // one output that's still built deterministically (see migrationsBlock()) —
+  // so this regression test (about latestByBasename's date-window selection,
+  // not about AI content) now targets migrations.md instead.
   const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
   // Pad with enough "middle" migrations that the fixture's one stale migration
   // sits outside the latest-10 window once 3 new ones are added on rerun.
   for (let i = 0; i < 8; i++) {
     addMigration(root, `Version2026060${i}120000`, `CREATE TABLE mid${i} (id SERIAL NOT NULL)`);
   }
-  const r1 = runGenerator(root, ['--no-ai']);
+  const r1 = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r1.status, 0, r1.stderr);
-  const before = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
+  const before = fs.readFileSync(path.join(root, '.context/stages/03_data/output/migrations.md'), 'utf8');
   assert.match(before, /Version20260301120000/);
 
   for (const [i, name] of ['Version20260710120000', 'Version20260711120000', 'Version20260712120000'].entries()) {
     addMigration(root, name, `CREATE TABLE t${i} (id SERIAL NOT NULL)`);
   }
-  const r2 = runGenerator(root, ['--no-ai']);
+  const r2 = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r2.status, 0, r2.stderr);
-  const after = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
+  const after = fs.readFileSync(path.join(root, '.context/stages/03_data/output/migrations.md'), 'utf8');
   assert.match(after, /Version20260710120000/);
   assert.match(after, /Version20260711120000/);
   assert.match(after, /Version20260712120000/);
-  assert.ok(!after.includes('AUTO_INCREMENT'), 'stale MySQL-era migration must not still be reported once newer ones exist within the latest-10 window');
+  assert.ok(!after.includes('Version20260301120000'), 'stale migration must not still be reported once newer ones exist within the latest-10 window');
 });
 
 test('latest-10 migration selection is not fooled by an archive/ subdirectory sorting after plain filenames', () => {
@@ -249,7 +212,10 @@ test('latest-10 migration selection is not fooled by an archive/ subdirectory so
   // "VersionYYYYMMDDHHMMSS.php" (lowercase 'a' > uppercase 'V'), so naively
   // slicing the last 10 of that path-sorted list surfaces old archived
   // migrations instead of the genuinely latest ones living flat in the dir.
+  // See the note on the previous test: this reads migrations.md (still
+  // deterministic), not schema.md (now AI-generated).
   const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
   fs.mkdirSync(path.join(root, 'migrations/archive'), { recursive: true });
   fs.renameSync(
     path.join(root, 'migrations/Version20260301120000.php'),
@@ -264,37 +230,17 @@ test('latest-10 migration selection is not fooled by an archive/ subdirectory so
   for (const [i, name] of ['Version20260710120000', 'Version20260711120000', 'Version20260712120000'].entries()) {
     addMigration(root, name, `CREATE TABLE t${i} (id SERIAL NOT NULL)`);
   }
-  const r = runGenerator(root, ['--no-ai']);
+  const r = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r.status, 0, r.stderr);
-  const schema = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
-  assert.match(schema, /Version20260712120000/, 'newest migration must be reported');
-  assert.ok(!schema.includes('AUTO_INCREMENT'), 'archived MySQL-era migration must not be reported as one of the latest');
-});
-
-test('symfony routes.md falls back to a static #[Route] scan when debug:router cannot be run', () => {
-  const root = copyFixture('symfony-app');
-  const r = runGenerator(root, ['--no-ai']);
-  assert.strictEqual(r.status, 0, r.stderr);
-  const routes = fs.readFileSync(path.join(root, '.context/stages/04_interfaces/output/routes.md'), 'utf8');
-  assert.match(routes, /static scan/);
-  assert.match(routes, /GET.*\/api\/foo\/\{id\}.*FooController::show/);
-  assert.match(routes, /POST.*\/api\/foo.*FooController::create/);
-  assert.ok(!/Run: `bin\/console/.test(routes), 'must not degrade to a bare "run this yourself" placeholder when routes were actually found');
-});
-
-test('laravel routes.md falls back to a static Route:: scan when artisan cannot be run', () => {
-  const root = copyFixture('laravel-app');
-  const r = runGenerator(root, ['--no-ai']);
-  assert.strictEqual(r.status, 0, r.stderr);
-  const routes = fs.readFileSync(path.join(root, '.context/stages/04_interfaces/output/routes.md'), 'utf8');
-  assert.match(routes, /static scan/);
-  assert.match(routes, /Route::get\('\/users'/);
-  assert.match(routes, /Route::post\('\/users'/);
+  const migrations = fs.readFileSync(path.join(root, '.context/stages/03_data/output/migrations.md'), 'utf8');
+  assert.match(migrations, /Version20260712120000/, 'newest migration must be reported');
+  assert.ok(!migrations.includes('Version20260301120000'), 'archived stale migration must not be reported as one of the latest');
 });
 
 test('domain notes from a hand-maintained CLAUDE.md (table format) are merged uniformly into entities.md', () => {
   const root = copyFixture('symfony-app');
-  const r = runGenerator(root, ['--no-ai']);
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r.status, 0, r.stderr);
   const entities = fs.readFileSync(path.join(root, '.context/stages/03_data/output/entities.md'), 'utf8');
   // Foo is named in the CLAUDE.md "Key Entities" table -> gets its purpose.
@@ -318,7 +264,8 @@ test('overlapping "Key Gotchas" lines collapse into one Field note per entity, n
   // produce three overlapping Field note blocks (the regression this guards
   // against) instead of the one complete one.
   const root = copyFixture('symfony-app');
-  const r = runGenerator(root, ['--no-ai']);
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r.status, 0, r.stderr);
   const entities = fs.readFileSync(path.join(root, '.context/stages/03_data/output/entities.md'), 'utf8');
 
@@ -349,7 +296,8 @@ test('Field notes only attach to entities that actually declare every field the 
   // The spl_object_id()/array_unique() gotcha names no real entity field at
   // all and must attach to nobody.
   const root = copyFixture('symfony-app');
-  const r = runGenerator(root, ['--no-ai']);
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r.status, 0, r.stderr);
   const entities = fs.readFileSync(path.join(root, '.context/stages/03_data/output/entities.md'), 'utf8');
 
@@ -397,7 +345,8 @@ function fieldIsDeclaredSomewhere(sections, fieldName) {
 
 test('the same CLAUDE.md merge covers 04_interfaces (services.md, controllers.md), not just 03_data', () => {
   const root = copyFixture('symfony-app');
-  const r = runGenerator(root, ['--no-ai']);
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
   assert.strictEqual(r.status, 0, r.stderr);
   // FooController is named in CLAUDE.md's "Key Services" table (also used for
   // controllers) — stage 04 must annotate it exactly like stage 03 annotated
@@ -405,20 +354,6 @@ test('the same CLAUDE.md merge covers 04_interfaces (services.md, controllers.md
   // stages must not drift independently.
   const controllers = fs.readFileSync(path.join(root, '.context/stages/04_interfaces/output/controllers.md'), 'utf8');
   assert.match(controllers, /#### `FooController`\n\n> \*\*Purpose:\*\* Handles inbound foo requests and validation\./);
-});
-
-test('router and manifest stamp generator commit and per-output extraction provenance', () => {
-  const root = copyFixture('symfony-app');
-  const r = runGenerator(root, ['--no-ai']);
-  assert.strictEqual(r.status, 0, r.stderr);
-  const router = fs.readFileSync(path.join(root, '.context/CONTEXT.md'), 'utf8');
-  assert.match(router, /Generator: v[\d.]+ \([0-9a-f]{7,}|unknown\)/);
-  assert.match(router, /## Extraction provenance/);
-  assert.match(router, /`04_interfaces\/routes\.md` \| static-regex-fallback/);
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, '.context/_config/manifest.json'), 'utf8'));
-  assert.match(manifest.generator_commit, /^[0-9a-f]{7,}$|^unknown$/);
-  assert.strictEqual(manifest.stages['03_data'].extraction['schema.md'], 'static-regex-scan');
-  assert.match(manifest.stages['04_interfaces'].extraction['routes.md'], /static-regex-fallback/);
 });
 
 test('knowledge-gap review writes KNOWLEDGE_GAPS.md and a router pointer when AI is available', () => {
@@ -438,15 +373,6 @@ test('knowledge-gap review writes KNOWLEDGE_GAPS.md and a router pointer when AI
 
   const router = fs.readFileSync(path.join(root, '.context/CONTEXT.md'), 'utf8');
   assert.match(router, /Unresolved: see `KNOWLEDGE_GAPS\.md`/);
-});
-
-test('knowledge-gap review is skipped entirely under --no-ai: no file, no router pointer', () => {
-  const root = copyFixture('symfony-app');
-  const r = runGenerator(root, ['--no-ai']);
-  assert.strictEqual(r.status, 0, r.stderr);
-  assert.ok(!fs.existsSync(path.join(root, '.context/KNOWLEDGE_GAPS.md')));
-  const router = fs.readFileSync(path.join(root, '.context/CONTEXT.md'), 'utf8');
-  assert.ok(!router.includes('KNOWLEDGE_GAPS.md'));
 });
 
 test('06_synthesis strips leaked model self-talk/routing preamble before writing output files', () => {

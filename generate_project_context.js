@@ -841,8 +841,8 @@ function _sourceDirList(ctx) {
 // "Key Gotchas" section with per-field business rules, parse both and attach
 // them next to the matching dumped entity/service/field instead of leaving
 // 03/04 mute about intent. Parsed directly and deterministically (not via the
-// AI summarizer) so it works even with --no-ai and doesn't depend on stage
-// 05's AI step having run first.
+// AI summarizer) so it doesn't depend on the AI CLI or on stage 05's AI step
+// having run first.
 //
 // This runs uniformly, not best-effort: every name the static extractors
 // dump gets checked against the parsed notes and gets *some* line — either
@@ -1519,7 +1519,7 @@ Based solely on the above, identify up to 5 areas of active development. For eac
     };
     stage06Process = `AI synthesis via ${args.aiCli}: project overview, architecture patterns, and development focus derived from stages 01–05 inputs.`;
   } else {
-    stage06Process = `Not executed — AI was unavailable (${ai.reason || '--no-ai'}). Re-run with an AI CLI (claude or gemini) on PATH to generate synthesis.`;
+    stage06Process = `Not executed — AI was unavailable (${ai.reason}). Re-run with an AI CLI (claude or gemini) on PATH to generate synthesis.`;
   }
   const written06 = writeStage(root, args.contextDir, '06_synthesis', {
     inputs: ['working: stage 01–05 outputs', 'source: git log', 'source: key project files (truncated samples)'],
