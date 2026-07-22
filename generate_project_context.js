@@ -27,10 +27,9 @@ const log = {
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const args = { useAi: true, aiCli: 'claude', contextDir: '.context', treeDepth: 3, debugDetection: false, dir: '.' };
+  const args = { aiCli: 'claude', contextDir: '.context', treeDepth: 3, debugDetection: false, dir: '.' };
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
-      case '--no-ai': args.useAi = false; break;
       case '--ai': args.aiCli = argv[++i]; break;
       case '--context-dir': args.contextDir = argv[++i]; break;
       case '--depth': args.treeDepth = parseInt(argv[++i], 10); if (Number.isNaN(args.treeDepth)) args.treeDepth = 3; break;
@@ -577,15 +576,14 @@ function updateAiInstructionFiles(root, contextDir) {
 
 // ── AI integration (port of bash lines 58–69, 71–84, 311–339, 368–437) ──────
 function checkAiAvailable(args) {
-  if (!args.useAi) return { useAi: false, reason: '--no-ai' };
   if (process.env.CLAUDECODE && args.aiCli === 'claude') {
-    return { useAi: false, reason: 'Running inside a Claude Code session — AI summaries skipped (nested sessions not supported).' };
+    return { useAi: false, reason: 'Running inside a Claude Code session — nested sessions not supported. Pass --ai gemini or a different CLI.' };
   }
   const which = spawnSync('which', [args.aiCli], { encoding: 'utf8' });
   if (which.status !== 0 || !which.stdout || !which.stdout.trim()) {
-    return { useAi: false, reason: `${args.aiCli} CLI not found — AI summaries skipped. Install ${args.aiCli} to enable.` };
+    return { useAi: false, reason: `${args.aiCli} CLI not found on PATH. Install ${args.aiCli}, or pass --ai <other-cli>.` };
   }
-  return { useAi: true, reason: `${args.aiCli} CLI detected — AI summaries enabled.` };
+  return { useAi: true, reason: `${args.aiCli} CLI detected.` };
 }
 
 // Every AI-generated stage goes through callAi(), and none of them asked the
@@ -1359,9 +1357,12 @@ async function main() {
   const root = path.resolve(args.dir ?? '.');
   if (!isDir(root)) { console.error(`Directory not found: ${args.dir}`); process.exit(1); }
   const repoName = path.basename(root);
-  // Phase 1: AI availability — needed for stack determination below.
+  // Phase 1: AI availability. Checked here (not yet enforced) because
+  // determineAppStack below can optionally use it for stack disambiguation
+  // even in the AI-optional --debug-detection path. The hard "AI required"
+  // gate is enforced further down, after the --debug-detection early-return.
   const ai = checkAiAvailable(args);
-  if (!ai.useAi && args.useAi) log.info(ai.reason);
+  log.info(ai.reason);
   // Phase 2: Determine tech stack (AI-assisted when ambiguous, then TTY, then heuristics).
   const { detection, appDir } = await determineAppStack(root, ai, args);
   // Phase 3: Environment, DB hints, versions — all depend on the resolved stack + appDir.
@@ -1370,11 +1371,34 @@ async function main() {
   const versions = extractVersions(root, appDir, detection);
   if (args.debugDetection) { console.log(JSON.stringify({ repoName, detection, devEnv, dbHints, versions, useAi: ai.useAi }, null, 2)); return; }
   // All filesystem writes happen after the debug-detection early-return above,
-  // so --debug-detection stays strictly read-only.
+  // so --debug-detection stays strictly read-only (and, deliberately, still
+  // works with no AI CLI on PATH — only the actual extraction below needs one).
+  if (!ai.useAi) {
+    console.error(`Error: an AI CLI is required to run this generator. ${ai.reason}`);
+    process.exit(1);
+  }
   // Phase 4: Ignore rules — set up after stack is known.
   seedIgnoreFile(root, args.contextDir);
   const ignoreFn = createIgnoreMatcher({ root, contextDir: args.contextDir });
   const ctx = { root, appDir, detection, devEnv, dbHints, versions, ignoreFn, treeDepth: args.treeDepth, contextDir: args.contextDir, useAi: ai.useAi, aiCli: args.aiCli, repoName };
+
+  // Phase 4b: load the manifest early (needed for 03_data/04_interfaces's
+  // generation cache) and read each stage's existing output before
+  // writeStage() wipes it, so generation can review-and-amend rather than
+  // blindly overwrite.
+  const priorManifest = loadManifest(root, args.contextDir, repoName);
+  ctx.aiCache = {
+    '03_data': (priorManifest.stages['03_data'] && priorManifest.stages['03_data'].ai_cache) || {},
+    '04_interfaces': (priorManifest.stages['04_interfaces'] && priorManifest.stages['04_interfaces'].ai_cache) || {},
+  };
+  const readExisting = (stageName, file) => readText(path.join(root, args.contextDir, 'stages', stageName, 'output', file));
+  ctx.existingOutputs = {
+    '03_data': { 'schema.md': readExisting('03_data', 'schema.md'), 'entities.md': readExisting('03_data', 'entities.md'), 'state.md': readExisting('03_data', 'state.md') },
+    '04_interfaces': { 'routes.md': readExisting('04_interfaces', 'routes.md'), 'controllers.md': readExisting('04_interfaces', 'controllers.md'), 'services.md': readExisting('04_interfaces', 'services.md') },
+  };
+
+  log.info(`Calling ${args.aiCli} — discovering data-model/routes/business-logic/state paths...`);
+  ctx.codeShape = discoverCodeShape(ctx);
 
   // OpenAPI AI summary must be computed before buildStages01to04() so stage 04's
   // api-spec.md can use it (bash lines 412–437).
@@ -1414,7 +1438,7 @@ Output only the above sections — no preamble, no trailing commentary.`);
   for (const stage of buildStages01to04(ctx)) {
     log.info(`Stage ${stage.name}...`);
     const written = writeStage(root, args.contextDir, stage.name, stage.contract, stage.outputs);
-    stageIndex.push({ stage: stage.name, purpose: purposes[stage.name], extraction: stage.extraction, files: written.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages', stage.name, 'output', f)).size })) });
+    stageIndex.push({ stage: stage.name, purpose: purposes[stage.name], extraction: stage.extraction, aiCache: stage.aiCache, files: written.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages', stage.name, 'output', f)).size })) });
   }
   // Point AI instruction files (CLAUDE.md etc.) at the generated context
   // BEFORE stage 05 indexes markdown files: if this creates CLAUDE.md fresh
@@ -1535,7 +1559,7 @@ Output only the gaps in that format — no preamble, no trailing commentary.`);
   finalManifest.generated_at = new Date().toISOString();
   finalManifest.project.stack = stackLabel(detection, versions, devEnv, dbHints);
   finalManifest.parsed_markdown = docResult.parsedMarkdown;
-  for (const s of stageIndex) finalManifest.stages[s.stage] = { last_run: finalManifest.generated_at, ...(s.extraction ? { extraction: s.extraction } : {}) };
+  for (const s of stageIndex) finalManifest.stages[s.stage] = { last_run: finalManifest.generated_at, ...(s.extraction ? { extraction: s.extraction } : {}), ...(s.aiCache ? { ai_cache: s.aiCache } : {}) };
   saveManifest(root, args.contextDir, finalManifest);
 }
 

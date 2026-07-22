@@ -5,12 +5,12 @@ const g = require('../generate_project_context.js');
 
 test('parseArgs defaults', () => {
   const a = g.parseArgs([]);
-  assert.deepStrictEqual(a, { useAi: true, aiCli: 'claude', contextDir: '.context', treeDepth: 3, debugDetection: false, dir: '.' });
+  assert.deepStrictEqual(a, { aiCli: 'claude', contextDir: '.context', treeDepth: 3, debugDetection: false, dir: '.' });
 });
 
 test('parseArgs flags', () => {
-  const a = g.parseArgs(['--no-ai', '--ai', 'gemini', '--context-dir', 'ctx', '--depth', '5', '--debug-detection']);
-  assert.deepStrictEqual(a, { useAi: false, aiCli: 'gemini', contextDir: 'ctx', treeDepth: 5, debugDetection: true, dir: '.' });
+  const a = g.parseArgs(['--ai', 'gemini', '--context-dir', 'ctx', '--depth', '5', '--debug-detection']);
+  assert.deepStrictEqual(a, { aiCli: 'gemini', contextDir: 'ctx', treeDepth: 5, debugDetection: true, dir: '.' });
 });
 
 test('parseArgs unknown flag throws', () => {
