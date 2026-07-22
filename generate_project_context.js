@@ -991,6 +991,62 @@ function runGenerationCall(ctx, { paths, promptInstructions, existingContent, ol
   return { content: result, method: 'ai-generated', cacheEntry: { source_hash: sourceHash, last_reviewed_at: now.toISOString() } };
 }
 
+// Pass 1: classify which paths define the data model, routes, business
+// logic, and client-side state — stack-agnostic by construction, since it
+// reasons from the directory tree and manifest rather than a fixed enum of
+// framework conventions. Replaces the old modelsDir/controllersDir/
+// servicesDir-based routing entirely.
+function discoverCodeShape(ctx) {
+  const empty = { dataModel: [], routes: [], businessLogic: [], state: [] };
+  const tree = treeBlock(ctx);
+  const manifestFiles = ['composer.json', 'package.json', 'go.mod', 'Cargo.toml', 'Gemfile', 'requirements.txt', 'pyproject.toml'];
+  let manifestBlock = '(no manifest file found)';
+  for (const f of manifestFiles) {
+    const content = readText(path.join(ctx.root, ctx.appDir, f));
+    if (content) { manifestBlock = `### ${f}\n\`\`\`\n${content.slice(0, 2000)}\n\`\`\`\n`; break; }
+  }
+  const prompt = `You are analysing a ${ctx.detection.primaryFramework} (${ctx.detection.primaryLang}) codebase to find which files define its data model, routes, business logic, and client-side state.
+
+Directory tree:
+${tree}
+
+${manifestBlock}
+
+Classify relevant paths (files or directories) into these categories. A path may belong to multiple categories. If a category has no relevant paths, leave its line empty after the colon. Use paths exactly as they appear in the tree above (relative, no leading ./).
+
+Respond in exactly this format — no other text:
+DATA_MODEL: <comma-separated paths, or empty>
+ROUTES: <comma-separated paths, or empty>
+BUSINESS_LOGIC: <comma-separated paths, or empty>
+STATE: <comma-separated paths, or empty>`;
+
+  const result = callAi(ctx.aiCli, prompt);
+  if (!result) return empty;
+
+  const parseLine = (label) => {
+    const m = result.match(new RegExp(`^${label}:\\s*(.*)$`, 'm'));
+    if (!m || !m[1].trim()) return [];
+    return m[1].split(',').map((p) => p.trim()).filter(Boolean);
+  };
+  const allFiles = walkFiles(ctx.root, ctx.ignoreFn);
+  const validate = (rawPaths) => {
+    const valid = new Set();
+    for (const raw of rawPaths) {
+      const norm = raw.replace(/^\.\//, '').replace(/\/$/, '');
+      for (const f of allFiles) {
+        if (f === norm || f.startsWith(norm + '/')) valid.add(f);
+      }
+    }
+    return [...valid].sort();
+  };
+  return {
+    dataModel: validate(parseLine('DATA_MODEL')),
+    routes: validate(parseLine('ROUTES')),
+    businessLogic: validate(parseLine('BUSINESS_LOGIC')),
+    state: validate(parseLine('STATE')),
+  };
+}
+
 // Port of bash lines 311–339: sample key project files into a char-budgeted block.
 function collectAiContextFiles(ctx) {
   let out = '';
@@ -1745,6 +1801,6 @@ module.exports = {
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
   checkAiAvailable, callAi, stripModelPreamble, collectAiContextFiles, collectReviewContext, makeAiSummarizer,
-  collectCategoryContent, computeCategoryHash, isCacheFresh, AI_REVIEW_STALENESS_DAYS, runGenerationCall,
+  collectCategoryContent, computeCategoryHash, isCacheFresh, AI_REVIEW_STALENESS_DAYS, runGenerationCall, discoverCodeShape,
 };
 if (require.main === module) main();

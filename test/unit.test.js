@@ -401,3 +401,49 @@ test('runGenerationCall\'s prompt tells the AI to revise, not rewrite, when exis
   assert.match(result.content, /Existing output from a previous run — update it/);
   assert.match(result.content, /#### `Foo` \(existing\)/);
 });
+
+test('discoverCodeShape parses DATA_MODEL/ROUTES/BUSINESS_LOGIC/STATE and validates paths against the filesystem', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'discover-'));
+  fs.mkdirSync(path.join(tmp, 'src/Entity'), { recursive: true });
+  fs.mkdirSync(path.join(tmp, 'src/Controller'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'src/Entity/Foo.php'), '<?php class Foo {}');
+  fs.writeFileSync(path.join(tmp, 'src/Controller/FooController.php'), '<?php class FooController {}');
+  const fakeAi = path.join(tmp, 'fake-discover.js');
+  fs.writeFileSync(fakeAi, [
+    '#!/usr/bin/env node',
+    'process.stdout.write(',
+    "  'DATA_MODEL: src/Entity/Foo.php, src/NoSuchFile.php\\n' +",
+    "  'ROUTES: src/Controller/FooController.php\\n' +",
+    "  'BUSINESS_LOGIC: \\n' +",
+    "  'STATE: \\n'",
+    ');',
+  ].join('\n'));
+  fs.chmodSync(fakeAi, 0o755);
+  const ctx = {
+    root: tmp, appDir: '.', aiCli: fakeAi, treeDepth: 3,
+    detection: { primaryFramework: 'symfony', primaryLang: 'php' },
+    ignoreFn: g.createIgnoreMatcher({ root: tmp, contextDir: '.context' }),
+  };
+  const shape = g.discoverCodeShape(ctx);
+  assert.deepStrictEqual(shape.dataModel, ['src/Entity/Foo.php'], 'a hallucinated path (NoSuchFile.php) must be silently dropped');
+  assert.deepStrictEqual(shape.routes, ['src/Controller/FooController.php']);
+  assert.deepStrictEqual(shape.businessLogic, []);
+  assert.deepStrictEqual(shape.state, []);
+});
+
+test('discoverCodeShape returns all-empty categories when the AI call fails', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'discover-fail-'));
+  const ctx = {
+    root: tmp, appDir: '.', aiCli: 'this-cli-does-not-exist-anywhere', treeDepth: 3,
+    detection: { primaryFramework: 'node', primaryLang: 'node' },
+    ignoreFn: g.createIgnoreMatcher({ root: tmp, contextDir: '.context' }),
+  };
+  const shape = g.discoverCodeShape(ctx);
+  assert.deepStrictEqual(shape, { dataModel: [], routes: [], businessLogic: [], state: [] });
+});
