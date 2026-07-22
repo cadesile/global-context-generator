@@ -213,15 +213,6 @@ test('extractDeclaredFieldNames pulls real property names but not incidental typ
   assert.ok(!names.has('ORM'), 'a decorator namespace must not be treated as a declared field name');
 });
 
-test('hasServerFramework recognizes backend frameworks and rejects bare node/client-only stacks', () => {
-  const base = { stacks: { express: false, next: false, fastapi: false, flask: false, django: false, rails: false, go: false } };
-  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'node' }), false, 'bare node (e.g. Expo/React Native) has no server framework');
-  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'symfony' }), true);
-  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'laravel' }), true);
-  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'node', stacks: { ...base.stacks, express: true } }), true);
-  assert.strictEqual(g.hasServerFramework({ ...base, primaryFramework: 'nextjs', stacks: { ...base.stacks, next: true } }), true);
-});
-
 test('collectCategoryContent concatenates file contents with path headers, budgeted', () => {
   const fs = require('node:fs');
   const os = require('node:os');

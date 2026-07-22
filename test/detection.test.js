@@ -14,7 +14,6 @@ test('detects expo/node stack', () => {
   assert.strictEqual(d.primaryFramework, 'expo', 'a real expo dependency must surface a specific "expo" framework, not a bare "node" fallback');
   assert.strictEqual(d.primaryExt, 'ts');
   assert.strictEqual(d.sourceDir, 'src');
-  assert.strictEqual(g.hasServerFramework(d), false, 'expo is a client stack with no server routing');
   const v = g.extractVersions(root, '.', d);
   assert.match(v.frameworkVersion, /^51/, 'frameworkVersion should come from the expo dependency version');
 });
@@ -65,7 +64,6 @@ test('laravel extractors: migrations and eloquent models', () => {
   const root = copyFixture('laravel-app');
   const d = g.detectStack(root);
   const ctx = { root, appDir: '.', detection: d, ignoreFn: g.createIgnoreMatcher({ root, contextDir: '.context' }), treeDepth: 3, dbHints: '', versions: {} };
-  assert.match(g.controllersBlock(ctx), /public function index/);
   const labels = g.sectionLabels(d, 'MySQL');
   assert.strictEqual(labels.entities, 'laravel Entity Definitions');
 });

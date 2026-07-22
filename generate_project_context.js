@@ -168,8 +168,7 @@ function detectStack(root, dir = '.') {
         d.stacks.express = true; d.primaryFramework = 'express';
         d.modelsDir = rel(dir, 'src/models'); d.controllersDir = rel(dir, 'src/controllers'); d.servicesDir = rel(dir, 'src/services');
       } else if (deps.expo || deps['react-native']) {
-        // Client app, no server routing — hasServerFramework() already
-        // treats this the same as bare node, but "node" as the Framework
+        // Client app, no server routing — but "node" as the Framework
         // label is unhelpfully generic once expo/expo-router/react-native
         // are actually present in dependencies.
         d.stacks.expo = true; d.primaryFramework = 'expo';
@@ -400,108 +399,6 @@ function fileSection(title, lang, body) { return body.trim() ? `#### \`${title}\
 // recent ones. Sorting by basename avoids that.
 function latestByBasename(files, n) {
   return [...files].sort((a, b) => path.basename(a).localeCompare(path.basename(b))).slice(-n);
-}
-
-// ── Signature scanners (bash lines 795–844) ──────────────────────────────────
-const SIGNATURE_PATTERNS = {
-  models: { php: /^\s*(private|protected|public)\s+/, python: /^\s*(class |    \w+ =|    \w+:)/, go: /^(type |func )/, node: /export (default )?class|interface|readonly |private |public /, ruby: /^\s*(belongs_to|has_many|has_one|validates|attr_)/ },
-  controllers: { php: /^\s*#\[Route\(|^\s*public function/, python: /@(app|router)\.(get|post|put|delete|patch)|^def |^async def /, go: /^func /, node: /\.(get|post|put|delete|patch)\s*\(|^export /, ruby: /^\s*def / },
-  services: { php: /^\s*public function/, python: /^def |^async def |^    def /, go: /^func /, node: /^export (async )?function|^\s*async \w+\s*\(/, ruby: /^\s*def / },
-};
-function signatureScan(ctx, dirKey, kind, limit) {
-  const dir = ctx.detection[dirKey];
-  const pat = SIGNATURE_PATTERNS[kind][ctx.detection.primaryLang];
-  if (!dir || !pat) return '';
-  return filesUnder(ctx, dir, '.' + ctx.detection.primaryExt)
-    .map((f) => fileSection(path.basename(f, '.' + ctx.detection.primaryExt), ctx.detection.primaryLang,
-      grepLines(readText(path.join(ctx.root, f)) || '', pat, limit).join('\n')))
-    .join('');
-}
-function modelsBlock(ctx) { return signatureScan(ctx, 'modelsDir', 'models', 15); }
-function controllersBlock(ctx) { return signatureScan(ctx, 'controllersDir', 'controllers', 20); }
-function servicesBlock(ctx) { return signatureScan(ctx, 'servicesDir', 'services', 12); }
-
-// A client-only stack (a React Native/Expo app, a bare TS library, a CLI
-// tool) has no server-side routing convention to scan at all. Route/
-// controller/service extraction below is written for backend MVC-style
-// frameworks; running its regexes against arbitrary client code produces
-// false positives (e.g. a bare `.get(`/`.set(` scan matching `Map.get(...)`
-// calls in unrelated engine logic) rather than skipping cleanly. Gate on
-// this before running any of that scanning.
-function hasServerFramework(d) {
-  return d.primaryFramework === 'symfony' || d.primaryFramework === 'laravel'
-    || !!d.stacks.express || !!d.stacks.next || !!d.stacks.fastapi || !!d.stacks.flask
-    || !!d.stacks.django || !!d.stacks.rails || !!d.stacks.go;
-}
-const NOT_APPLICABLE_NO_SERVER_FRAMEWORK = 'not-applicable (no server framework detected for this stack)';
-
-// ── Routes (bash lines 457–471) ──────────────────────────────────────────────
-// Symfony/Laravel routes are best extracted live (`bin/console debug:router`,
-// `php artisan route:list`) since that reflects the resolved route table
-// exactly. But that requires a booted app/container, which isn't available
-// at generation time in CI or when the dev container isn't running. Rather
-// than degrade to a "go run this yourself" placeholder — useless to an agent
-// that can't necessarily start the container — fall back to a static regex
-// scan over controller/route-definition files so routes.md always has
-// *something* extracted.
-function _routesSymfonyStatic(ctx) {
-  const files = filesUnder(ctx, ctx.detection.controllersDir, '.php');
-  const rows = [];
-  for (const f of files) {
-    const content = readText(path.join(ctx.root, f)) || '';
-    const classMatch = content.match(/#\[Route\(([^)]*)\)\]\s*\n(?:\s*#\[[^\]]*\]\s*\n)*\s*(?:final\s+|abstract\s+)*class\s+(\w+)/);
-    const classAttrs = classMatch ? classMatch[1] : '';
-    const classPath = (classAttrs.match(/^\s*['"]([^'"]*)['"]/) || classAttrs.match(/path:\s*['"]([^'"]*)['"]/) || [])[1] || '';
-    const re = /#\[Route\(([^)]*)\)\]\s*\n(?:\s*#\[[^\]]*\]\s*\n)*\s*public function (\w+)/g;
-    let m;
-    while ((m = re.exec(content))) {
-      const attrs = m[1];
-      const routePath = (attrs.match(/^\s*['"]([^'"]*)['"]/) || attrs.match(/path:\s*['"]([^'"]*)['"]/) || [])[1] || '';
-      const methods = ((attrs.match(/methods:\s*\[([^\]]*)\]/) || [])[1] || '').replace(/['"]/g, '').trim() || 'ANY';
-      rows.push({ methods, path: (classPath + routePath) || '/', target: `${path.basename(f, '.php')}::${m[2]}` });
-    }
-  }
-  if (!rows.length) return '';
-  return '_Extracted via static scan of `#[Route(...)]` attributes — run `bin/console debug:router` for the live, resolved route table._\n\n'
-    + '| Method | Path | Controller#action |\n|---|---|---|\n'
-    + rows.map((r) => `| ${r.methods} | \`${r.path}\` | \`${r.target}\` |`).join('\n') + '\n';
-}
-function _routesLaravelStatic(ctx) {
-  const routesDir = path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, 'routes');
-  const files = filesUnder(ctx, routesDir, '.php');
-  const lines = files.flatMap((f) => grepLines(readText(path.join(ctx.root, f)) || '',
-    /Route::(get|post|put|delete|patch|match|resource|apiResource|group)\(/, 200));
-  if (!lines.length) return '';
-  return '_Extracted via static scan of `Route::` calls in `routes/` — run `php artisan route:list` for the live, resolved route table._\n\n'
-    + codeFence('php', lines.slice(0, 60).join('\n'));
-}
-function routesBlock(ctx) {
-  const d = ctx.detection;
-  if (!hasServerFramework(d)) {
-    return '_Not applicable — no recognized server framework (Express/Next.js/Symfony/Laravel/Django/Flask/FastAPI/Rails/Go) '
-      + 'was detected for this stack. Skipping route extraction rather than scanning client-side code, which would otherwise '
-      + 'match arbitrary method calls (e.g. `Map.get(...)`) as if they were route definitions._\n';
-  }
-  if (d.primaryFramework === 'symfony') {
-    return _routesSymfonyStatic(ctx) || 'No `#[Route(...)]` attributes found via static scan (and `bin/console debug:router` was not run).\n';
-  }
-  if (d.primaryFramework === 'laravel') {
-    return _routesLaravelStatic(ctx) || 'No `Route::` definitions found via static scan of `routes/` (and `php artisan route:list` was not run).\n';
-  }
-  if (d.stacks.express || d.stacks.next) {
-    const lines = filesUnder(ctx, d.controllersDir || d.sourceDir, '.ts')
-      .concat(filesUnder(ctx, d.controllersDir || d.sourceDir, '.js'))
-      .flatMap((f) => grepLines(readText(path.join(ctx.root, f)) || '', /\.(get|post|put|delete|patch)\s*\(/, 40))
-      .filter((l) => !/^\s*\/\//.test(l)).slice(0, 40);
-    return lines.length ? codeFence('js', lines.join('\n')) : '';
-  }
-  if (d.stacks.fastapi || d.stacks.flask) {
-    const lines = walkFiles(ctx.root, ctx.ignoreFn, { extensions: ['.py'] })
-      .flatMap((f) => grepLines(readText(path.join(ctx.root, f)) || '', /@(app|router)\.(get|post|put|delete|patch)/, 40)).slice(0, 40);
-    return lines.length ? codeFence('python', lines.join('\n')) : '';
-  }
-  if (d.stacks.rails) { const r = readText(path.join(ctx.root, 'config/routes.rb')); return r ? codeFence('ruby', r.split('\n').slice(0, 60).join('\n')) : ''; }
-  return '';
 }
 
 // ── Misc blocks (bash lines 289–309, 440–455, 874–902, 1005–1011) ───────────
@@ -1362,41 +1259,51 @@ function buildStages01to04(ctx) {
         aiCache: { 'schema.md': schemaGen.cacheEntry, 'entities.md': entitiesGen.cacheEntry, 'state.md': stateGen.cacheEntry } };
     })(),
     (() => {
-      const routesContent = routesBlock(ctx);
-      const controllersContent = controllersBlock(ctx);
-      const servicesContent = servicesBlock(ctx);
+      const cache = (ctx.aiCache && ctx.aiCache['04_interfaces']) || {};
+      const existing = (file) => (ctx.existingOutputs && ctx.existingOutputs['04_interfaces'] && ctx.existingOutputs['04_interfaces'][file]) || null;
+
+      const routesGen = runGenerationCall(ctx, {
+        paths: ctx.codeShape.routes,
+        promptInstructions: `Produce the API routes for this ${ctx.detection.primaryFramework} codebase as markdown: a table with columns Method | Path | Handler, one row per route found in the source files below. If no routes are found, say so in one sentence instead of an empty table.`,
+        existingContent: existing('routes.md'),
+        oldCacheEntry: cache['routes.md'],
+      });
+      const controllersGen = runGenerationCall(ctx, {
+        paths: ctx.codeShape.routes,
+        promptInstructions: `Produce the controller/handler signatures for this ${ctx.detection.primaryFramework} codebase as markdown: for each controller/handler found in the source files below, list its method signatures.\n\nFor each controller/handler found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`ControllerName\`\n\`\`\`${ctx.detection.primaryExt}\n<method signatures, one per line>\n\`\`\`\n\nRepeat for every controller/handler found. Do not add any other heading levels or wrap controllers in additional sections.`,
+        existingContent: existing('controllers.md'),
+        oldCacheEntry: cache['controllers.md'],
+      });
+      const servicesGen = runGenerationCall(ctx, {
+        paths: ctx.codeShape.businessLogic,
+        promptInstructions: `Produce the service/business-logic signatures for this ${ctx.detection.primaryFramework} codebase as markdown: for each service class or module found in the source files below, list its method/function signatures.\n\nFor each service found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`ServiceName\`\n\`\`\`${ctx.detection.primaryExt}\n<method signatures, one per line>\n\`\`\`\n\nRepeat for every service found. Do not add any other heading levels or wrap services in additional sections.`,
+        existingContent: existing('services.md'),
+        oldCacheEntry: cache['services.md'],
+      });
+
       return { name: '04_interfaces',
-        contract: { inputs: [`source: ${ctx.detection.controllersDir || 'controller files'}`, `source: ${ctx.detection.servicesDir || 'service files'}`, openApiFile ? `source: ${openApiFile}` : 'source: (no OpenAPI spec found)'],
-          process: 'Extracted API routes, controller and service signatures, and the OpenAPI spec if present.',
+        contract: { inputs: ['source: AI-discovered route/business-logic paths', openApiFile ? `source: ${openApiFile}` : 'source: (no OpenAPI spec found)'],
+          process: 'Extracted API routes, controller and service signatures via AI discovery+generation, and the OpenAPI spec if present.',
           outputs: [{ file: 'routes.md', desc: 'API routes' }, { file: 'controllers.md', desc: 'controller signatures' }, { file: 'services.md', desc: 'service signatures' }, { file: 'api-spec.md', desc: 'OpenAPI/Swagger spec' }] },
         outputs: {
-          'routes.md': routesContent ? `# API Routes\n\n${routesContent}` : '',
-          'controllers.md': controllersContent ? `# Controllers\n\n${annotateWithDomainNotes(controllersContent, domainNotes.services)}` : '',
-          'services.md': servicesContent ? `# Services\n\n${annotateWithDomainNotes(servicesContent, domainNotes.services)}` : '',
+          'routes.md': routesGen.content ? `# API Routes\n\n${routesGen.content}` : '',
+          'controllers.md': controllersGen.content ? `# Controllers\n\n${annotateWithDomainNotes(controllersGen.content, domainNotes.services)}` : '',
+          'services.md': servicesGen.content ? `# Services\n\n${annotateWithDomainNotes(servicesGen.content, domainNotes.services)}` : '',
           'api-spec.md': openApiRaw ? `# API Specification\n\n${openApiRaw}` : '',
         },
         extraction: {
-          'routes.md': routesMethod(ctx, routesContent),
-          'controllers.md': hasServerFramework(ctx.detection) ? staticScanMethod(controllersContent) : NOT_APPLICABLE_NO_SERVER_FRAMEWORK,
-          'services.md': hasServerFramework(ctx.detection) ? staticScanMethod(servicesContent) : NOT_APPLICABLE_NO_SERVER_FRAMEWORK,
+          'routes.md': routesGen.method,
+          'controllers.md': controllersGen.method,
+          'services.md': servicesGen.method,
           'api-spec.md': openApiRaw ? (ctx.aiOpenApi ? 'ai-summarized-openapi-spec' : 'raw-openapi-spec-excerpt') : 'unavailable',
-        } };
+        },
+        aiCache: { 'routes.md': routesGen.cacheEntry, 'controllers.md': controllersGen.cacheEntry, 'services.md': servicesGen.cacheEntry } };
     })(),
   ];
 }
 // Provenance labels for CONTEXT.md/manifest.json (see extraction map above):
 // lets a consuming agent tell how much to trust a section without guessing.
 function staticScanMethod(content) { return content && content.trim() ? 'static-regex-scan' : 'unavailable (no scanner for this stack, or nothing matched)'; }
-function routesMethod(ctx, content) {
-  const d = ctx.detection;
-  if (!hasServerFramework(d)) return NOT_APPLICABLE_NO_SERVER_FRAMEWORK;
-  if (d.primaryFramework === 'symfony' || d.primaryFramework === 'laravel') {
-    return content && content.includes('static scan')
-      ? 'static-regex-fallback (live debug:router/route:list not attempted by this generator)'
-      : 'unavailable (static scan found nothing; live debug:router/route:list not attempted)';
-  }
-  return staticScanMethod(content);
-}
 
 // Shared by writeRouter() and collectReviewContext() (Task 2) — one row per
 // stage output whose extraction method was recorded (see buildStages01to04()).
@@ -1637,7 +1544,6 @@ module.exports = {
   DEFAULT_IGNORES, compileIgnorePatterns, createIgnoreMatcher, walkFiles, latestByBasename, detectStack, detectDevEnv,
   detectDatabases, extractVersions, findCandidateSubDirs, collectStackContext, aiDetermineStack, determineAppStack,
   buildContextBlock, injectContextReference, updateAiInstructionFiles,
-  modelsBlock, controllersBlock, servicesBlock, routesBlock, hasServerFramework,
   extractDomainNotes, annotateWithDomainNotes, dedupeGotchaHits, extractDeclaredFieldNames,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
