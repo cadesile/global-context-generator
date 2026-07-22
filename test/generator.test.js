@@ -462,3 +462,14 @@ test('06_synthesis strips leaked model self-talk/routing preamble before writing
     assert.match(content, /FooController handles inbound foo requests/, `${file} should still contain the real content`);
   }
 });
+
+test('03_data (schema/entities/state) is generated via AI discovery, not per-framework regex', () => {
+  const root = copyFixture('symfony-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+  const r = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const schema = fs.readFileSync(path.join(root, '.context/stages/03_data/output/schema.md'), 'utf8');
+  assert.match(schema, /#### `Foo`/, 'schema.md content must come from the AI generation call, in the required heading template');
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, '.context/_config/manifest.json'), 'utf8'));
+  assert.strictEqual(manifest.stages['03_data'].extraction['schema.md'], 'ai-generated');
+});

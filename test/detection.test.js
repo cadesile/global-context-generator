@@ -61,29 +61,13 @@ test('unknown stack yields unknown lang', () => {
   assert.strictEqual(d.primaryLang, 'unknown');
 });
 
-test('expo extractors: sqlite schema, ts entities, zustand state', () => {
-  const root = copyFixture('expo-app');
-  const d = g.detectStack(root);
-  const ctx = { root, appDir: '.', detection: d, ignoreFn: g.createIgnoreMatcher({ root, contextDir: '.context' }), treeDepth: 3, dbHints: 'SQLite', versions: { frameworkVersion: '', phpVersion: '', nodeVersion: '18' } };
-  assert.match(g.schemaBlock(ctx), /CREATE TABLE users/);
-  const ents = g.entitiesBlock(ctx);
-  assert.match(ents, /interface User/);
-  assert.match(ents, /TaskStatus/);
-  assert.match(g.stateBlock(ctx), /interface TaskStore/);
-  assert.match(g.envBlock(ctx), /SECRET_KEY=\*\*\*/);
-  assert.ok(!g.envBlock(ctx).includes('supersecret'));
-  assert.match(g.depsBlock(ctx), /zustand/);
-});
-
 test('laravel extractors: migrations and eloquent models', () => {
   const root = copyFixture('laravel-app');
   const d = g.detectStack(root);
   const ctx = { root, appDir: '.', detection: d, ignoreFn: g.createIgnoreMatcher({ root, contextDir: '.context' }), treeDepth: 3, dbHints: '', versions: {} };
-  assert.match(g.schemaBlock(ctx), /create_users_table/);
-  assert.match(g.entitiesBlock(ctx), /\$fillable/);
   assert.match(g.controllersBlock(ctx), /public function index/);
   const labels = g.sectionLabels(d, 'MySQL');
-  assert.strictEqual(labels.entities, 'Eloquent Model Definitions');
+  assert.strictEqual(labels.entities, 'laravel Entity Definitions');
 });
 
 test('envBlock prefers app subdir .env over root .env.example', () => {

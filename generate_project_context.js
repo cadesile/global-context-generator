@@ -59,23 +59,6 @@ function grepLines(content, regex, limit = Infinity) {
 
 // Brace-balanced block extractor: from each line matching startRegex, capture
 // until braces close (or the line ends in ';' before any '{' opens).
-function extractBlocks(content, startRegex, { maxLines = 120 } = {}) {
-  const lines = content.split('\n');
-  const out = [];
-  let inBlock = false, depth = 0, buf = [];
-  for (const line of lines) {
-    if (!inBlock && startRegex.test(line)) { inBlock = true; depth = 0; buf = []; }
-    if (!inBlock) continue;
-    buf.push(line);
-    for (const c of line) {
-      if (c === '{') depth++;
-      else if (c === '}') { depth--; if (depth === 0) { out.push(buf.join('\n')); inBlock = false; } }
-    }
-    if (inBlock && depth === 0 && line.includes(';') && !line.includes('{')) { out.push(buf.join('\n')); inBlock = false; }
-  }
-  return out.join('\n\n').split('\n').slice(0, maxLines).join('\n');
-}
-
 // ── Ignore engine ────────────────────────────────────────────────────────────
 // Supported syntax (v1): comments (#), blank lines, trailing-/ dir patterns,
 // leading-/ root anchors, * and ? globs, ** deep globs. Negation (!) is
@@ -417,167 +400,6 @@ function fileSection(title, lang, body) { return body.trim() ? `#### \`${title}\
 // recent ones. Sorting by basename avoids that.
 function latestByBasename(files, n) {
   return [...files].sort((a, b) => path.basename(a).localeCompare(path.basename(b))).slice(-n);
-}
-
-// SQL statements are delimited by balanced PARENTHESES, not braces — reusing
-// the brace-balanced extractBlocks() here (as an earlier version did) breaks
-// two ways: a literal `{}`/`{...}` inside a DEFAULT value (e.g. `DEFAULT
-// '{}'`) trips its brace-depth counter to a false "closed" before the
-// statement's real `);`, and its aggregate maxLines cap slices whichever
-// statement happens to fall across that line budget, independent of where
-// any one statement actually ends. Track paren depth instead (braces never
-// matter to SQL structure at all) and terminate each statement at its own
-// `;` once parens are back to 0, with no cap on how many statements/lines
-// the full scan can return — the schema is the one artifact worth capturing
-// in full rather than budget-truncating.
-function extractSqlStatements(content, startRegex) {
-  const lines = content.split('\n');
-  const out = [];
-  let inBlock = false, parenDepth = 0, sawParen = false, buf = [];
-  for (const line of lines) {
-    if (!inBlock && startRegex.test(line)) { inBlock = true; parenDepth = 0; sawParen = false; buf = []; }
-    if (!inBlock) continue;
-    buf.push(line);
-    for (const c of line) {
-      if (c === '(') { parenDepth++; sawParen = true; }
-      else if (c === ')') { parenDepth = Math.max(0, parenDepth - 1); }
-    }
-    if (sawParen && parenDepth === 0 && line.includes(';')) { out.push(buf.join('\n')); inBlock = false; }
-  }
-  return out.join('\n\n');
-}
-
-// ── Schema scanners (bash lines 496–615) ─────────────────────────────────────
-function _schemaSqlite(ctx) {
-  const files = walkFiles(ctx.root, ctx.ignoreFn, { extensions: ['.sql'] })
-    .concat(walkFiles(ctx.root, ctx.ignoreFn, { extensions: ['.ts'] }).filter((f) => path.basename(f) === 'schema.ts'))
-    .sort().slice(0, 5);
-  if (!files.length) return '_No schema file found._\n';
-  return files.map((f) => {
-    const content = readText(path.join(ctx.root, f)) || '';
-    const blocks = extractSqlStatements(content, /CREATE TABLE/i);
-    const sqlStatements = blocks || grepLines(content, /CREATE TABLE|^\s+\w+ (TEXT|INTEGER|REAL|BLOB)/i, 40).join('\n');
-    return `**\`${f}\`**\n${codeFence('sql', sqlStatements)}`;
-  }).join('\n');
-}
-function _schemaDoctrine(ctx) {
-  let out = '';
-  const migs = latestByBasename(filesUnder(ctx, path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, 'migrations'), '.php'), 10);
-  if (migs.length) {
-    out += '**Migrations (latest 10):**\n\n';
-    for (const f of migs) {
-      out += `- \`${path.basename(f, '.php')}\`\n`;
-      const sqls = (readText(path.join(ctx.root, f)) || '').match(/addSql\('([^']+)'/g) || [];
-      out += sqls.slice(0, 3).map((s) => `  → ${s.replace(/^addSql\('/, '').replace(/'$/, '')}\n`).join('');
-    }
-    out += '\n';
-  }
-  for (const f of filesUnder(ctx, ctx.detection.modelsDir, '.php')) {
-    const content = readText(path.join(ctx.root, f)) || '';
-    if (!/#\[ORM\\Entity\]|@ORM\\Entity/.test(content)) continue;
-    const lines = grepLines(content, /#\[ORM\\(Column|Id|ManyToOne|OneToMany|ManyToMany|OneToOne|JoinColumn)|@ORM\\(Column|Id|ManyTo|JoinColumn)|\$\w+/, 25)
-      .filter((l) => !/^\s*\/\//.test(l));
-    out += fileSection(path.basename(f, '.php'), 'php', lines.join('\n'));
-  }
-  return out;
-}
-function _schemaLaravel(ctx) {
-  let out = '';
-  const migs = latestByBasename(filesUnder(ctx, path.posix.join(ctx.appDir === '.' ? '' : ctx.appDir, 'database/migrations'), '.php'), 10);
-  if (migs.length) {
-    out += '**Migrations (latest 10):**\n\n';
-    for (const f of migs) {
-      out += `- \`${path.basename(f, '.php')}\`\n`;
-      const fields = grepLines(readText(path.join(ctx.root, f)) || '', /->(string|integer|boolean|foreignId|timestamps|text|decimal)/, 4);
-      out += fields.map((l) => `  ${l.trim()}\n`).join('');
-    }
-    out += '\n';
-  }
-  const modelsDir = ctx.detection.modelsDir || 'app/Models';
-  const models = filesUnder(ctx, modelsDir, '.php');
-  if (models.length) out += '**Eloquent models:**\n\n';
-  for (const f of models) {
-    const lines = grepLines(readText(path.join(ctx.root, f)) || '',
-      /protected \$fillable|protected \$casts|protected \$table|public function (belongsTo|hasMany|hasOne|belongsToMany|morphTo|morphMany)/, 20);
-    out += fileSection(path.basename(f, '.php'), 'php', lines.join('\n'));
-  }
-  return out;
-}
-function _schemaDjango(ctx) {
-  return walkFiles(ctx.root, ctx.ignoreFn, { extensions: ['.py'] })
-    .filter((f) => path.basename(f) === 'models.py')
-    .map((f) => fileSection(f, 'python',
-      grepLines(readText(path.join(ctx.root, f)) || '', /^class [A-Z]|^\s+\w+ = models\.|^\s+class Meta|^\s+ordering|^\s+db_table/, 30).join('\n')))
-    .join('');
-}
-function _schemaRails(ctx) {
-  const content = readText(path.join(ctx.root, 'db/schema.rb'));
-  if (!content) return '_No `db/schema.rb` found._\n';
-  return '**`db/schema.rb`**\n' + codeFence('ruby',
-    grepLines(content, /create_table|t\.(string|integer|boolean|text|datetime|references|belongs_to|index)|^end/, 80).join('\n'));
-}
-function _schemaGo(ctx) {
-  return filesUnder(ctx, ctx.detection.modelsDir, '.go')
-    .map((f) => fileSection(f, 'go', extractBlocks(readText(path.join(ctx.root, f)) || '', /^type .* struct \{/, { maxLines: 60 })))
-    .join('');
-}
-function schemaBlock(ctx) {
-  const s = ctx.detection.stacks;
-  if (s.symfony) return _schemaDoctrine(ctx);
-  if (s.laravel) return _schemaLaravel(ctx);
-  if (s.django) return _schemaDjango(ctx);
-  if (s.rails) return _schemaRails(ctx);
-  if (s.go) return _schemaGo(ctx);
-  if (s.node) return _schemaSqlite(ctx);
-  return `_No schema scanner available for detected stack (${ctx.detection.primaryFramework})._\n`;
-}
-
-// ── Entity scanners (bash lines 620–708) ─────────────────────────────────────
-function _entitiesTypescript(ctx) {
-  let typesDir = path.posix.join(ctx.detection.sourceDir || 'src', 'types');
-  if (!isDir(path.join(ctx.root, typesDir))) typesDir = 'src/types';
-  return filesUnder(ctx, typesDir, '.ts').filter((f) => !f.endsWith('.test.ts'))
-    .map((f) => fileSection(f, 'typescript', extractBlocks(readText(path.join(ctx.root, f)) || '', /^export (interface|type|enum) /)))
-    .join('');
-}
-function _entitiesDoctrine(ctx) {
-  return filesUnder(ctx, ctx.detection.modelsDir, '.php')
-    .map((f) => fileSection(path.basename(f, '.php'), 'php',
-      grepLines(readText(path.join(ctx.root, f)) || '', /^\s*(#\[|@ORM|private|protected|public)\s.*\$|\s@var\s/, 25).filter((l) => !/^\s*\/\//.test(l)).join('\n')))
-    .join('');
-}
-function _entitiesEloquent(ctx) {
-  return filesUnder(ctx, ctx.detection.modelsDir || 'app/Models', '.php')
-    .map((f) => fileSection(path.basename(f, '.php'), 'php',
-      grepLines(readText(path.join(ctx.root, f)) || '', /protected \$fillable|protected \$casts|protected \$hidden|public function /, 20).join('\n')))
-    .join('');
-}
-function _entitiesDjango(ctx) { return _schemaDjango(ctx); }
-function _entitiesRails(ctx) {
-  return filesUnder(ctx, 'app/models', '.rb')
-    .map((f) => fileSection(path.basename(f, '.rb'), 'ruby',
-      grepLines(readText(path.join(ctx.root, f)) || '', /^\s*(belongs_to|has_many|has_one|has_and_belongs_to_many|validates|scope|enum|attribute)/, 20).join('\n')))
-    .join('');
-}
-function entitiesBlock(ctx) {
-  const s = ctx.detection.stacks;
-  if (s.symfony) return _entitiesDoctrine(ctx);
-  if (s.laravel) return _entitiesEloquent(ctx);
-  if (s.django) return _entitiesDjango(ctx);
-  if (s.rails) return _entitiesRails(ctx);
-  if (s.go) return _schemaGo(ctx);
-  if (s.node) return _entitiesTypescript(ctx);
-  return `_No entity scanner available for detected stack (${ctx.detection.primaryFramework})._\n`;
-}
-
-// ── State layer: Zustand (bash lines 713–738) ────────────────────────────────
-function stateBlock(ctx) {
-  if (!ctx.detection.stacks.node) return '';
-  let storesDir = path.posix.join(ctx.detection.sourceDir || 'src', 'stores');
-  if (!isDir(path.join(ctx.root, storesDir))) storesDir = 'src/stores';
-  return filesUnder(ctx, storesDir, '.ts').filter((f) => !f.endsWith('.test.ts'))
-    .map((f) => fileSection(path.basename(f, '.ts'), 'typescript', extractBlocks(readText(path.join(ctx.root, f)) || '', /^(export )?interface /, { maxLines: 60 })))
-    .join('');
 }
 
 // ── Signature scanners (bash lines 795–844) ──────────────────────────────────
@@ -1330,14 +1152,12 @@ function annotateWithDomainNotes(md, notes, gotchas = []) {
 }
 
 function sectionLabels(detection, dbHints) {
-  const s = detection.stacks; const db = dbHints || 'SQL';
-  if (s.symfony) return { schema: `Database Schema (Doctrine / ${db})`, entities: 'Doctrine Entity Definitions', state: '' };
-  if (s.laravel) return { schema: `Database Schema (Eloquent / ${db})`, entities: 'Eloquent Model Definitions', state: '' };
-  if (s.django) return { schema: `Database Schema (Django ORM / ${db})`, entities: 'Django Model Definitions', state: '' };
-  if (s.rails) return { schema: `Database Schema (ActiveRecord / ${db})`, entities: 'ActiveRecord Model Definitions', state: '' };
-  if (s.go) return { schema: 'Database Schema (Go structs)', entities: 'Go Type Definitions', state: '' };
-  if (s.node) return { schema: `Database Schema (${db || 'SQLite'})`, entities: 'TypeScript Entity Definitions', state: 'Store Shapes (State)' };
-  return { schema: 'Database Schema', entities: 'Entity Definitions', state: '' };
+  const db = dbHints || 'SQL';
+  return {
+    schema: `Database Schema (${detection.primaryFramework} / ${db})`,
+    entities: `${detection.primaryFramework} Entity Definitions`,
+    state: 'Store Shapes (State)',
+  };
 }
 
 // ── ICM stage writers ────────────────────────────────────────────────────────
@@ -1500,24 +1320,46 @@ function buildStages01to04(ctx) {
         outputs: [{ file: 'structure.md', desc: 'directory tree' }, { file: 'git-activity.md', desc: 'recent commits and changed files' }] },
       outputs: { 'structure.md': `# Project Structure\n\n${treeBlock(ctx)}`, 'git-activity.md': `# Recent Git Activity\n\n${gitActivityBlock(ctx)}` } },
     (() => {
-      const schemaContent = schemaBlock(ctx);
-      const entitiesContent = entitiesBlock(ctx);
       const migrationsContent = migrationsBlock(ctx);
+      const cache = (ctx.aiCache && ctx.aiCache['03_data']) || {};
+      const existing = (file) => (ctx.existingOutputs && ctx.existingOutputs['03_data'] && ctx.existingOutputs['03_data'][file]) || null;
+
+      const schemaGen = runGenerationCall(ctx, {
+        paths: ctx.codeShape.dataModel,
+        promptInstructions: `Produce the database/storage schema for this ${ctx.detection.primaryFramework} codebase as markdown: for each table or storage collection found in the source files below, describe its columns/fields, types, and constraints (primary keys, uniqueness, defaults, foreign keys).\n\nFor each table/collection found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`TableName\`\n\`\`\`sql\n<column definitions, one per line>\n\`\`\`\n\nRepeat for every table/collection found. Do not add any other heading levels or wrap tables in additional sections.`,
+        existingContent: existing('schema.md'),
+        oldCacheEntry: cache['schema.md'],
+      });
+      const entitiesGen = runGenerationCall(ctx, {
+        paths: ctx.codeShape.dataModel,
+        promptInstructions: `Produce the code-level entity/model definitions for this ${ctx.detection.primaryFramework} codebase as markdown: for each entity/model class or type found in the source files below, list its declared fields/properties with their types.\n\nFor each entity/model found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`EntityName\`\n\`\`\`${ctx.detection.primaryExt}\n<field/property declarations, one per line>\n\`\`\`\n\nRepeat for every entity/model found. Do not add any other heading levels or wrap entities in additional sections.`,
+        existingContent: existing('entities.md'),
+        oldCacheEntry: cache['entities.md'],
+      });
+      const stateGen = runGenerationCall(ctx, {
+        paths: ctx.codeShape.state,
+        promptInstructions: `Produce the client-side state/store shape for this ${ctx.detection.primaryFramework} codebase as markdown: for each store/state container found in the source files below, list its shape (fields and their types).\n\nFor each store found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`StoreName\`\n\`\`\`${ctx.detection.primaryExt}\n<field declarations, one per line>\n\`\`\`\n\nRepeat for every store found. Do not add any other heading levels or wrap stores in additional sections.`,
+        existingContent: existing('state.md'),
+        oldCacheEntry: cache['state.md'],
+      });
+
       return { name: '03_data',
-        contract: { inputs: [`source: ${ctx.detection.modelsDir || 'model files'}`, 'source: migrations / schema files'],
-          process: `Extracted the data layer for ${ctx.detection.primaryFramework}: schema, entity definitions${labels.state ? ', store shapes' : ''}, and migrations.`,
-          outputs: [{ file: 'schema.md', desc: labels.schema }, { file: 'entities.md', desc: labels.entities }, { file: 'state.md', desc: labels.state || 'store shapes' }, { file: 'migrations.md', desc: 'latest migrations' }] },
+        contract: { inputs: ['source: AI-discovered data-model paths (see 04_interfaces\' discovery pass)', 'source: migrations / schema files'],
+          process: `Extracted the data layer for ${ctx.detection.primaryFramework} via AI discovery+generation: schema, entity definitions, store shapes, and migrations.`,
+          outputs: [{ file: 'schema.md', desc: labels.schema }, { file: 'entities.md', desc: labels.entities }, { file: 'state.md', desc: labels.state }, { file: 'migrations.md', desc: 'latest migrations' }] },
         outputs: {
-          'schema.md': `# ${labels.schema}\n\n${schemaContent}`,
-          'entities.md': `# ${labels.entities}\n\n${annotateWithDomainNotes(entitiesContent, domainNotes.entities, domainNotes.gotchas)}`,
-          'state.md': labels.state ? `# ${labels.state}\n\n${stateBlock(ctx)}` : '',
+          'schema.md': schemaGen.content ? `# ${labels.schema}\n\n${schemaGen.content}` : '',
+          'entities.md': entitiesGen.content ? `# ${labels.entities}\n\n${annotateWithDomainNotes(entitiesGen.content, domainNotes.entities, domainNotes.gotchas)}` : '',
+          'state.md': stateGen.content ? `# ${labels.state}\n\n${stateGen.content}` : '',
           'migrations.md': `# Migrations\n\n${migrationsContent}`,
         },
         extraction: {
-          'schema.md': staticScanMethod(schemaContent),
-          'entities.md': staticScanMethod(entitiesContent),
+          'schema.md': schemaGen.method,
+          'entities.md': entitiesGen.method,
+          'state.md': stateGen.method,
           'migrations.md': staticScanMethod(migrationsContent),
-        } };
+        },
+        aiCache: { 'schema.md': schemaGen.cacheEntry, 'entities.md': entitiesGen.cacheEntry, 'state.md': stateGen.cacheEntry } };
     })(),
     (() => {
       const routesContent = routesBlock(ctx);
@@ -1791,11 +1633,11 @@ Output only the gaps in that format — no preamble, no trailing commentary.`);
 }
 
 module.exports = {
-  parseArgs, readText, readJson, sha256, exists, isDir, grepLines, extractBlocks, extractSqlStatements, log, GENERATOR_VERSION,
+  parseArgs, readText, readJson, sha256, exists, isDir, grepLines, log, GENERATOR_VERSION,
   DEFAULT_IGNORES, compileIgnorePatterns, createIgnoreMatcher, walkFiles, latestByBasename, detectStack, detectDevEnv,
   detectDatabases, extractVersions, findCandidateSubDirs, collectStackContext, aiDetermineStack, determineAppStack,
   buildContextBlock, injectContextReference, updateAiInstructionFiles,
-  schemaBlock, entitiesBlock, stateBlock, modelsBlock, controllersBlock, servicesBlock, routesBlock, hasServerFramework,
+  modelsBlock, controllersBlock, servicesBlock, routesBlock, hasServerFramework,
   extractDomainNotes, annotateWithDomainNotes, dedupeGotchaHits, extractDeclaredFieldNames,
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
