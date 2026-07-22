@@ -13,11 +13,14 @@ Based on the Interpretable Context Methodology (https://arxiv.org/html/2603.1602
 
 ## Installation
 
-**Option 1 — project-local**
+Run it from within this repository, pointing `--dir` at the target project —
+no need to copy `generate_project_context.js` anywhere:
 
-Copy `generate_project_context.js` into your project.
+```bash
+node /path/to/global-context-generator/generate_project_context.js --dir /path/to/target/project
+```
 
-**Option 2 — global**
+**Optional — global command**
 
 ```bash
 cp generate_project_context.js /usr/local/bin/generate_project_context
