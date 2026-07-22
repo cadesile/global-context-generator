@@ -310,3 +310,94 @@ test('isCacheFresh requires both matching hash and last review within 30 days', 
   assert.strictEqual(g.isCacheFresh(null, 'abc', now), false, 'no prior cache entry — never fresh');
   assert.strictEqual(g.isCacheFresh(undefined, 'abc', now), false);
 });
+
+function makeFakeAiScript(tmp, responseFn) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const scriptPath = path.join(tmp, 'fake-ai-runner.js');
+  fs.writeFileSync(scriptPath, `#!/usr/bin/env node\nconst prompt = process.argv[3] || '';\n${responseFn}\n`);
+  fs.chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
+test('runGenerationCall skips the AI call and returns "ai-no-relevant-files-found" when paths is empty', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-call-empty-'));
+  const ctx = { root: tmp, aiCli: 'this-should-never-be-invoked' };
+  const result = g.runGenerationCall(ctx, { paths: [], promptInstructions: 'irrelevant', existingContent: null, oldCacheEntry: null });
+  assert.deepStrictEqual(result, { content: '', method: 'ai-no-relevant-files-found', cacheEntry: null });
+});
+
+test('runGenerationCall calls the AI and returns ai-generated with a fresh cache entry on a cache miss', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-call-miss-'));
+  fs.writeFileSync(path.join(tmp, 'Foo.php'), 'class Foo { private $id; }');
+  const fakeAi = makeFakeAiScript(tmp, `process.stdout.write('#### \`Foo\`\\n\`\`\`php\\nprivate $id;\\n\`\`\`\\n');`);
+  const ctx = { root: tmp, aiCli: fakeAi };
+  const result = g.runGenerationCall(ctx, { paths: ['Foo.php'], promptInstructions: 'Describe entities.', existingContent: null, oldCacheEntry: null });
+  assert.strictEqual(result.method, 'ai-generated');
+  assert.match(result.content, /#### `Foo`/);
+  assert.ok(result.cacheEntry.source_hash);
+  assert.ok(result.cacheEntry.last_reviewed_at);
+});
+
+test('runGenerationCall skips the AI call when the cache is fresh, reusing existing content', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-call-fresh-'));
+  fs.writeFileSync(path.join(tmp, 'Foo.php'), 'class Foo { private $id; }');
+  const ctx = { root: tmp, aiCli: 'this-should-never-be-invoked' };
+  const sourceHash = g.computeCategoryHash(tmp, ['Foo.php']);
+  const oldCacheEntry = { source_hash: sourceHash, last_reviewed_at: new Date().toISOString() };
+  const result = g.runGenerationCall(ctx, { paths: ['Foo.php'], promptInstructions: 'Describe entities.', existingContent: '#### `Foo` (existing)', oldCacheEntry });
+  assert.strictEqual(result.method, `ai-cached (last reviewed ${oldCacheEntry.last_reviewed_at.slice(0, 10)})`);
+  assert.strictEqual(result.content, '#### `Foo` (existing)');
+  assert.strictEqual(result.cacheEntry, oldCacheEntry);
+});
+
+test('runGenerationCall re-runs when the hash matches but the cache is stale (>30 days)', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-call-stale-'));
+  fs.writeFileSync(path.join(tmp, 'Foo.php'), 'class Foo { private $id; }');
+  const fakeAi = makeFakeAiScript(tmp, `process.stdout.write('#### \`Foo\`\\n\`\`\`php\\nprivate $id; // refreshed\\n\`\`\`\\n');`);
+  const ctx = { root: tmp, aiCli: fakeAi };
+  const sourceHash = g.computeCategoryHash(tmp, ['Foo.php']);
+  const staleDate = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+  const result = g.runGenerationCall(ctx, { paths: ['Foo.php'], promptInstructions: 'Describe entities.', existingContent: '#### `Foo` (old)', oldCacheEntry: { source_hash: sourceHash, last_reviewed_at: staleDate } });
+  assert.strictEqual(result.method, 'ai-generated');
+  assert.match(result.content, /refreshed/);
+});
+
+test('runGenerationCall falls back to existing content and reports ai-call-failed when the AI returns nothing', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-call-fail-'));
+  fs.writeFileSync(path.join(tmp, 'Foo.php'), 'class Foo { private $id; }');
+  const fakeAi = makeFakeAiScript(tmp, `process.stdout.write('');`);
+  const ctx = { root: tmp, aiCli: fakeAi };
+  const result = g.runGenerationCall(ctx, { paths: ['Foo.php'], promptInstructions: 'Describe entities.', existingContent: '#### `Foo` (kept)', oldCacheEntry: null });
+  assert.strictEqual(result.method, 'ai-call-failed (existing content retained)');
+  assert.strictEqual(result.content, '#### `Foo` (kept)');
+});
+
+test('runGenerationCall\'s prompt tells the AI to revise, not rewrite, when existing content is present', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-call-revise-'));
+  fs.writeFileSync(path.join(tmp, 'Foo.php'), 'class Foo { private $id; }');
+  // Echo the prompt back so the test can inspect what runGenerationCall sent.
+  const fakeAi = makeFakeAiScript(tmp, `process.stdout.write(prompt);`);
+  const ctx = { root: tmp, aiCli: fakeAi };
+  const result = g.runGenerationCall(ctx, { paths: ['Foo.php'], promptInstructions: 'Describe entities.', existingContent: '#### `Foo` (existing)', oldCacheEntry: null });
+  assert.match(result.content, /Existing output from a previous run — update it/);
+  assert.match(result.content, /#### `Foo` \(existing\)/);
+});

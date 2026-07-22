@@ -966,6 +966,31 @@ function isCacheFresh(cacheEntry, currentHash, now = new Date()) {
   return ageMs < AI_REVIEW_STALENESS_DAYS * 24 * 60 * 60 * 1000;
 }
 
+function runGenerationCall(ctx, { paths, promptInstructions, existingContent, oldCacheEntry }) {
+  if (!paths.length) {
+    return { content: '', method: 'ai-no-relevant-files-found', cacheEntry: null };
+  }
+  const sourceHash = computeCategoryHash(ctx.root, paths);
+  const now = new Date();
+  if (isCacheFresh(oldCacheEntry, sourceHash, now)) {
+    return { content: existingContent || '', method: `ai-cached (last reviewed ${oldCacheEntry.last_reviewed_at.slice(0, 10)})`, cacheEntry: oldCacheEntry };
+  }
+  const fileContent = collectCategoryContent(ctx.root, paths);
+  const existingBlock = existingContent
+    ? `\n\nExisting output from a previous run — update it: keep what's still accurate (including anything a human added by hand), remove what's no longer true, add what's new. Do not rewrite from scratch unless the existing content is clearly stale or wrong.\n\n${existingContent}`
+    : '';
+  const prompt = `${promptInstructions}\n\nSource files:\n${fileContent}${existingBlock}\n\nOutput only the markdown content described above — no preamble, no trailing commentary.`;
+  const result = callAi(ctx.aiCli, prompt);
+  if (!result) {
+    return {
+      content: existingContent || '',
+      method: existingContent ? 'ai-call-failed (existing content retained)' : 'ai-call-failed (no content produced)',
+      cacheEntry: oldCacheEntry || null,
+    };
+  }
+  return { content: result, method: 'ai-generated', cacheEntry: { source_hash: sourceHash, last_reviewed_at: now.toISOString() } };
+}
+
 // Port of bash lines 311–339: sample key project files into a char-budgeted block.
 function collectAiContextFiles(ctx) {
   let out = '';
@@ -1720,6 +1745,6 @@ module.exports = {
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
   checkAiAvailable, callAi, stripModelPreamble, collectAiContextFiles, collectReviewContext, makeAiSummarizer,
-  collectCategoryContent, computeCategoryHash, isCacheFresh, AI_REVIEW_STALENESS_DAYS,
+  collectCategoryContent, computeCategoryHash, isCacheFresh, AI_REVIEW_STALENESS_DAYS, runGenerationCall,
 };
 if (require.main === module) main();
