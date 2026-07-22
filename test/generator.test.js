@@ -72,6 +72,43 @@ test('stage 05 indexes docs, excludes vendored md, and ledger skips unchanged fi
   assert.strictEqual(m2.parsed_markdown['docs/stable.md'].parsed_at, m1.parsed_markdown['docs/stable.md'].parsed_at);
 });
 
+test('a doc previously summarized without AI upgrades to ai_summarized: true on a later successful-AI run, even with unchanged content', () => {
+  // Coverage restored after the removal of the old --no-ai-based upgrade test
+  // (Task 8). callAi() can return '' even when ctx.useAi is true — e.g. one
+  // specific AI invocation errors, times out, or exits non-zero while AI is
+  // otherwise available for the run — and runDocumentationStage persists
+  // ai_summarized: false for that doc in that case (see generate_project_
+  // context.js's runDocumentationStage, ~line 1144). A later run's
+  // needsAiUpgrade check (~line 1127) must re-summarize that doc once AI
+  // succeeds, even though its content never changed. We simulate the "prior
+  // failed-AI-call" state by hand-editing the manifest, since there's no
+  // longer a --no-ai flag to reach it via a real two-run scenario.
+  const root = copyFixture('expo-app');
+  const fakeAi = path.join(__dirname, 'fixtures/bin/fake-ai.js');
+
+  const r1 = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r1.status, 0, r1.stderr);
+  const manifestPath = path.join(root, '.context/_config/manifest.json');
+  const m1 = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const readmeEntry1 = m1.parsed_markdown['README.md'];
+  assert.ok(readmeEntry1, 'README.md must have a manifest entry after the first run');
+  assert.strictEqual(readmeEntry1.ai_summarized, true, 'first run summarizes with AI available');
+  const originalSha256 = readmeEntry1.sha256;
+
+  // Simulate a prior run where this specific doc's AI call failed (empty
+  // callAi result) even though AI was available overall: flip ai_summarized
+  // to false while leaving sha256 (and the source file) untouched.
+  m1.parsed_markdown['README.md'] = { ...readmeEntry1, ai_summarized: false };
+  fs.writeFileSync(manifestPath, JSON.stringify(m1, null, 2) + '\n');
+
+  const r2 = runGenerator(root, ['--ai', fakeAi]);
+  assert.strictEqual(r2.status, 0, r2.stderr);
+  const m2 = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const readmeEntry2 = m2.parsed_markdown['README.md'];
+  assert.strictEqual(readmeEntry2.sha256, originalSha256, 'content is genuinely unchanged, so sha256 must be identical');
+  assert.strictEqual(readmeEntry2.ai_summarized, true, 'needsAiUpgrade must re-summarize a stale ai_summarized:false entry once AI succeeds, despite unchanged content');
+});
+
 test('exits 1 with no writes when no AI CLI is on PATH', () => {
   const { spawnSync } = require('node:child_process');
   const root = copyFixture('expo-app');
