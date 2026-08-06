@@ -540,3 +540,63 @@ test('callAiAsync resolves to empty string on non-zero exit', async () => {
     cp.spawn = realSpawn;
   }
 });
+
+test('buildStages01to04 runs the 03_data and 04_interfaces AI calls concurrently, not sequentially', async () => {
+  const { copyFixture } = require('./helpers.js');
+  const root = copyFixture('expo-app');
+  const detection = g.detectStack(root);
+  const devEnv = g.detectDevEnv(root, detection);
+  const dbHints = g.detectDatabases(root, '.');
+  const versions = g.extractVersions(root, '.', detection);
+  const ignoreFn = g.createIgnoreMatcher({ root, contextDir: '.context' });
+
+  const ctx = {
+    root, appDir: '.', detection, devEnv, dbHints, versions, ignoreFn,
+    treeDepth: 3, contextDir: '.context', useAi: true, aiCli: 'fake-ai', repoName: 'expo-app',
+    aiCache: { '03_data': {}, '04_interfaces': {} },
+    existingOutputs: { '03_data': {}, '04_interfaces': {} },
+    codeShape: {
+      dataModel: ['src/db/schema.sql'],
+      routes: ['src/engine/leagueEngine.ts'],
+      businessLogic: ['src/engine/leagueEngine.ts'],
+      state: ['src/stores/useTaskStore.ts'],
+    },
+  };
+
+  const cp = require('node:child_process');
+  const realSpawn = cp.spawn;
+  const starts = [];
+  cp.spawn = (cmd, args, opts) => {
+    const { EventEmitter } = require('node:events');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { write() {}, end() {} };
+    starts.push(Date.now());
+    setTimeout(() => {
+      child.stdout.emit('data', Buffer.from('#### `X`\n```\nfield\n```'));
+      child.emit('close', 0);
+    }, 50); // each call takes 50ms
+    return child;
+  };
+  try {
+    const stages = await g.buildStages01to04(ctx);
+    const dataStage = stages.find((s) => s.name === '03_data');
+    const interfacesStage = stages.find((s) => s.name === '04_interfaces');
+    assert.ok(dataStage);
+    assert.ok(interfacesStage);
+    // 3 calls for 03_data + 3 calls for 04_interfaces = 6 spawn() invocations.
+    // The two stages themselves still run one after the other (buildStages01to04
+    // awaits each stage's IIFE inline before moving to the next array entry),
+    // so only the 3 starts *within* each stage are expected to cluster tightly;
+    // the gap between stage groups (index 2 -> 3) legitimately spans the full
+    // ~50ms delay of the prior stage's Promise.all and must be excluded.
+    assert.strictEqual(starts.length, 6, `expected 6 spawn() calls, got ${starts.length}`);
+    const dataGap = Math.max(...starts.slice(1, 3).map((t, i) => t - starts[i]));
+    const interfacesGap = Math.max(...starts.slice(4, 6).map((t, i) => t - starts[i + 3]));
+    assert.ok(dataGap < 40, `expected 03_data's 3 calls to start concurrently, got gaps up to ${dataGap}ms`);
+    assert.ok(interfacesGap < 40, `expected 04_interfaces's 3 calls to start concurrently, got gaps up to ${interfacesGap}ms`);
+  } finally {
+    cp.spawn = realSpawn;
+  }
+});

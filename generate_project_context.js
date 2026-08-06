@@ -764,6 +764,31 @@ function runGenerationCall(ctx, { paths, promptInstructions, existingContent, ol
   return { content: result, method: 'ai-generated', cacheEntry: { source_hash: sourceHash, last_reviewed_at: now.toISOString() } };
 }
 
+async function runGenerationCallAsync(ctx, { paths, promptInstructions, existingContent, oldCacheEntry }) {
+  if (!paths.length) {
+    return { content: '', method: 'ai-no-relevant-files-found', cacheEntry: null };
+  }
+  const sourceHash = computeCategoryHash(ctx.root, paths);
+  const now = new Date();
+  if (existingContent && isCacheFresh(oldCacheEntry, sourceHash, now)) {
+    return { content: existingContent || '', method: `ai-cached (last reviewed ${oldCacheEntry.last_reviewed_at.slice(0, 10)})`, cacheEntry: oldCacheEntry };
+  }
+  const fileContent = collectCategoryContent(ctx.root, paths);
+  const existingBlock = existingContent
+    ? `\n\nExisting output from a previous run — update it: keep what's still accurate (including anything a human added by hand), remove what's no longer true, add what's new. Do not rewrite from scratch unless the existing content is clearly stale or wrong.\n\n${existingContent}`
+    : '';
+  const prompt = `${promptInstructions}\n\nSource files:\n${fileContent}${existingBlock}\n\nOutput only the markdown content described above — no preamble, no trailing commentary.`;
+  const result = await callAiAsync(ctx.aiCli, prompt);
+  if (!result) {
+    return {
+      content: existingContent || '',
+      method: existingContent ? 'ai-call-failed (existing content retained)' : 'ai-call-failed (no content produced)',
+      cacheEntry: oldCacheEntry || null,
+    };
+  }
+  return { content: result, method: 'ai-generated', cacheEntry: { source_hash: sourceHash, last_reviewed_at: now.toISOString() } };
+}
+
 // Pass 1: classify which paths define the data model, routes, business
 // logic, and client-side state — stack-agnostic by construction, since it
 // reasons from the directory tree and manifest rather than a fixed enum of
@@ -1282,7 +1307,7 @@ function devSetupBlock(ctx) {
   }
 }
 
-function buildStages01to04(ctx) {
+async function buildStages01to04(ctx) {
   const labels = sectionLabels(ctx.detection, ctx.dbHints);
   const label = stackLabel(ctx.detection, ctx.versions, ctx.devEnv, ctx.dbHints);
   const domainNotes = extractDomainNotes(ctx);
@@ -1305,29 +1330,31 @@ function buildStages01to04(ctx) {
         process: 'Captured the directory structure and recent git activity.',
         outputs: [{ file: 'structure.md', desc: 'directory tree' }, { file: 'git-activity.md', desc: 'recent commits and changed files' }] },
       outputs: { 'structure.md': `# Project Structure\n\n${treeBlock(ctx)}`, 'git-activity.md': `# Recent Git Activity\n\n${gitActivityBlock(ctx)}` } },
-    (() => {
+    await (async () => {
       const migrationsContent = migrationsBlock(ctx);
       const cache = (ctx.aiCache && ctx.aiCache['03_data']) || {};
       const existing = (file) => (ctx.existingOutputs && ctx.existingOutputs['03_data'] && ctx.existingOutputs['03_data'][file]) || null;
 
-      const schemaGen = runGenerationCall(ctx, {
+      const schemaPromise = runGenerationCallAsync(ctx, {
         paths: ctx.codeShape.dataModel,
         promptInstructions: `Produce the database/storage schema for this ${ctx.detection.primaryFramework} codebase as markdown: for each table or storage collection found in the source files below, describe its columns/fields, types, and constraints (primary keys, uniqueness, defaults, foreign keys).\n\nFor each table/collection found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`TableName\`\n\`\`\`sql\n<column definitions, one per line>\n\`\`\`\n\nRepeat for every table/collection found. Do not add any other heading levels or wrap tables in additional sections.`,
         existingContent: existing('schema.md'),
         oldCacheEntry: cache['schema.md'],
       });
-      const entitiesGen = runGenerationCall(ctx, {
+      const entitiesPromise = runGenerationCallAsync(ctx, {
         paths: ctx.codeShape.dataModel,
         promptInstructions: `Produce the code-level entity/model definitions for this ${ctx.detection.primaryFramework} codebase as markdown: for each entity/model class or type found in the source files below, list its declared fields/properties with their types.\n\nFor each entity/model found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`EntityName\`\n\`\`\`${ctx.detection.primaryExt}\n<field/property declarations, one per line>\n\`\`\`\n\nRepeat for every entity/model found. Do not add any other heading levels or wrap entities in additional sections.`,
         existingContent: existing('entities.md'),
         oldCacheEntry: cache['entities.md'],
       });
-      const stateGen = runGenerationCall(ctx, {
+      const statePromise = runGenerationCallAsync(ctx, {
         paths: ctx.codeShape.state,
         promptInstructions: `Produce the client-side state/store shape for this ${ctx.detection.primaryFramework} codebase as markdown: for each store/state container found in the source files below, list its shape (fields and their types).\n\nFor each store found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`StoreName\`\n\`\`\`${ctx.detection.primaryExt}\n<field declarations, one per line>\n\`\`\`\n\nRepeat for every store found. Do not add any other heading levels or wrap stores in additional sections.`,
         existingContent: existing('state.md'),
         oldCacheEntry: cache['state.md'],
       });
+
+      const [schemaGen, entitiesGen, stateGen] = await Promise.all([schemaPromise, entitiesPromise, statePromise]);
 
       return { name: '03_data',
         contract: { inputs: ['source: AI-discovered data-model paths (see 04_interfaces\' discovery pass)', 'source: migrations / schema files'],
@@ -1347,28 +1374,30 @@ function buildStages01to04(ctx) {
         },
         aiCache: { 'schema.md': schemaGen.cacheEntry, 'entities.md': entitiesGen.cacheEntry, 'state.md': stateGen.cacheEntry } };
     })(),
-    (() => {
+    await (async () => {
       const cache = (ctx.aiCache && ctx.aiCache['04_interfaces']) || {};
       const existing = (file) => (ctx.existingOutputs && ctx.existingOutputs['04_interfaces'] && ctx.existingOutputs['04_interfaces'][file]) || null;
 
-      const routesGen = runGenerationCall(ctx, {
+      const routesPromise = runGenerationCallAsync(ctx, {
         paths: ctx.codeShape.routes,
         promptInstructions: `Produce the API routes for this ${ctx.detection.primaryFramework} codebase as markdown: a table with columns Method | Path | Handler, one row per route found in the source files below. If no routes are found, say so in one sentence instead of an empty table.`,
         existingContent: existing('routes.md'),
         oldCacheEntry: cache['routes.md'],
       });
-      const controllersGen = runGenerationCall(ctx, {
+      const controllersPromise = runGenerationCallAsync(ctx, {
         paths: ctx.codeShape.routes,
         promptInstructions: `Produce the controller/handler signatures for this ${ctx.detection.primaryFramework} codebase as markdown: for each controller/handler found in the source files below, list its method signatures.\n\nFor each controller/handler found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`ControllerName\`\n\`\`\`${ctx.detection.primaryExt}\n<method signatures, one per line>\n\`\`\`\n\nRepeat for every controller/handler found. Do not add any other heading levels or wrap controllers in additional sections.`,
         existingContent: existing('controllers.md'),
         oldCacheEntry: cache['controllers.md'],
       });
-      const servicesGen = runGenerationCall(ctx, {
+      const servicesPromise = runGenerationCallAsync(ctx, {
         paths: ctx.codeShape.businessLogic,
         promptInstructions: `Produce the service/business-logic signatures for this ${ctx.detection.primaryFramework} codebase as markdown: for each service class or module found in the source files below, list its method/function signatures.\n\nFor each service found, use exactly this format (critical — other tooling parses this structure):\n\n#### \`ServiceName\`\n\`\`\`${ctx.detection.primaryExt}\n<method signatures, one per line>\n\`\`\`\n\nRepeat for every service found. Do not add any other heading levels or wrap services in additional sections.`,
         existingContent: existing('services.md'),
         oldCacheEntry: cache['services.md'],
       });
+
+      const [routesGen, controllersGen, servicesGen] = await Promise.all([routesPromise, controllersPromise, servicesPromise]);
 
       return { name: '04_interfaces',
         contract: { inputs: ['source: AI-discovered route/business-logic paths', openApiFile ? `source: ${openApiFile}` : 'source: (no OpenAPI spec found)'],
@@ -1541,7 +1570,7 @@ Output only the above sections — no preamble, no trailing commentary.`);
 
   const stageIndex = [];
   const purposes = { '01_overview': 'Stack, environment, metrics', '02_architecture': 'Structure and git activity', '03_data': 'Schema, entities, state, migrations', '04_interfaces': 'Routes, controllers, services, API spec' };
-  for (const stage of buildStages01to04(ctx)) {
+  for (const stage of await buildStages01to04(ctx)) {
     log.info(`Stage ${stage.name}...`);
     const written = writeStage(root, args.contextDir, stage.name, stage.contract, stage.outputs);
     stageIndex.push({ stage: stage.name, purpose: purposes[stage.name], extraction: stage.extraction, aiCache: stage.aiCache, files: written.map((f) => ({ rel: `output/${f}`, bytes: fs.statSync(path.join(root, args.contextDir, 'stages', stage.name, 'output', f)).size })) });
@@ -1679,6 +1708,6 @@ module.exports = {
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
   checkAiAvailable, callAi, callAiAsync, stripModelPreamble, collectAiContextFiles, collectReviewContext, makeAiSummarizer,
-  collectCategoryContent, computeCategoryHash, isCacheFresh, AI_REVIEW_STALENESS_DAYS, runGenerationCall, discoverCodeShape,
+  collectCategoryContent, computeCategoryHash, isCacheFresh, AI_REVIEW_STALENESS_DAYS, runGenerationCall, runGenerationCallAsync, discoverCodeShape,
 };
 if (require.main === module) main();
