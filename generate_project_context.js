@@ -643,6 +643,43 @@ function callAi(aiCli, prompt) {
   }
 }
 
+function callAiAsync(aiCli, prompt) {
+  const PROMPT_ARG_LIMIT = 8 * 1024; // 8KB — stay well under OS ARG_MAX/Win32 command-line limits
+  return new Promise((resolve) => {
+    const isOversized = Buffer.byteLength(prompt, 'utf8') > PROMPT_ARG_LIMIT;
+    let child;
+    try {
+      child = isOversized
+        ? childProcess.spawn(aiCli, ['-p'], { stdio: ['pipe', 'pipe', 'pipe'] })
+        : childProcess.spawn(aiCli, ['-p', prompt], { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      log.warn(`${aiCli} failed: ${e.message}`);
+      resolve('');
+      return;
+    }
+    let stdout = '';
+    let settled = false;
+    const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
+    const timer = setTimeout(() => { child.kill(); finish(''); }, 120000);
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.on('error', (e) => { clearTimeout(timer); log.warn(`${aiCli} failed: ${e.message}`); finish(''); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const out = stdout.trim();
+      if (code !== 0 || !out) {
+        log.warn(`${aiCli} returned empty for: ${prompt.slice(0, 60)}...`);
+        finish('');
+        return;
+      }
+      finish(stripModelPreamble(out));
+    });
+    if (isOversized) {
+      child.stdin.write(prompt);
+      child.stdin.end();
+    }
+  });
+}
+
 // Priority order for the knowledge-gaps review input: domain/interface
 // stages first (schema, entities, routes, services — the densest source of
 // real business-logic gaps), then the rest, filling whatever budget remains.
@@ -1641,7 +1678,7 @@ module.exports = {
   migrationsBlock, envBlock, depsBlock, metricsBlock, treeBlock, gitActivityBlock, findOpenApiFile, sectionLabels,
   writeStage, seedIgnoreFile, stackLabel, devSetupBlock, buildStages01to04, writeRouter, buildExtractionRows,
   slugForPath, mdDigest, loadManifest, saveManifest, runDocumentationStage, emptyManifest,
-  checkAiAvailable, callAi, stripModelPreamble, collectAiContextFiles, collectReviewContext, makeAiSummarizer,
+  checkAiAvailable, callAi, callAiAsync, stripModelPreamble, collectAiContextFiles, collectReviewContext, makeAiSummarizer,
   collectCategoryContent, computeCategoryHash, isCacheFresh, AI_REVIEW_STALENESS_DAYS, runGenerationCall, discoverCodeShape,
 };
 if (require.main === module) main();

@@ -497,3 +497,46 @@ test('callAi still passes short prompts directly as an argv element', () => {
     spawnSyncMod.spawnSync = realSpawnSync;
   }
 });
+
+test('callAiAsync resolves with trimmed stdout on success', async () => {
+  const cp = require('node:child_process');
+  const realSpawn = cp.spawn;
+  cp.spawn = (cmd, args, opts) => {
+    const { EventEmitter } = require('node:events');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { write() {}, end() {} };
+    process.nextTick(() => {
+      child.stdout.emit('data', Buffer.from('  hello from ai  '));
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  try {
+    const result = await g.callAiAsync('fake-cli', 'a prompt');
+    assert.strictEqual(result, 'hello from ai');
+  } finally {
+    cp.spawn = realSpawn;
+  }
+});
+
+test('callAiAsync resolves to empty string on non-zero exit', async () => {
+  const cp = require('node:child_process');
+  const realSpawn = cp.spawn;
+  cp.spawn = (cmd, args, opts) => {
+    const { EventEmitter } = require('node:events');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { write() {}, end() {} };
+    process.nextTick(() => child.emit('close', 1));
+    return child;
+  };
+  try {
+    const result = await g.callAiAsync('fake-cli', 'a prompt');
+    assert.strictEqual(result, '');
+  } finally {
+    cp.spawn = realSpawn;
+  }
+});
