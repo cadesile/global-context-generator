@@ -404,3 +404,22 @@ test('discoverCodeShape returns all-empty categories when the AI call fails', ()
   const shape = g.discoverCodeShape(ctx);
   assert.deepStrictEqual(shape, { dataModel: [], routes: [], businessLogic: [], state: [] });
 });
+
+test('checkAiAvailable uses "where" lookup on win32, "which" elsewhere', () => {
+  const realPlatform = process.platform;
+  const spawnSyncMod = require('node:child_process');
+  const realSpawnSync = spawnSyncMod.spawnSync;
+  let capturedCmd = null;
+  spawnSyncMod.spawnSync = (cmd, args, opts) => {
+    if (args && args[0] === 'nonexistent-cli-xyz') { capturedCmd = cmd; return { status: 1, stdout: '' }; }
+    return realSpawnSync(cmd, args, opts);
+  };
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  try {
+    g.checkAiAvailable({ aiCli: 'nonexistent-cli-xyz' });
+    assert.strictEqual(capturedCmd, 'where');
+  } finally {
+    Object.defineProperty(process, 'platform', { value: realPlatform });
+    spawnSyncMod.spawnSync = realSpawnSync;
+  }
+});

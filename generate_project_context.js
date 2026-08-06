@@ -6,14 +6,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const os = require('node:os');
-const { spawnSync } = require('node:child_process');
+const childProcess = require('node:child_process');
 
 const GENERATOR_VERSION = '2.0.0';
 // Commit hash of the generator script itself (not the target project) —
 // lets a consuming agent tell exactly which version of the generator's
 // extraction logic produced a given .context/ folder.
 function generatorCommit() {
-  const r = spawnSync('git', ['-C', __dirname, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' });
+  const r = childProcess.spawnSync('git', ['-C', __dirname, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' });
   return r.status === 0 ? r.stdout.trim() : 'unknown';
 }
 const GENERATOR_COMMIT = generatorCommit();
@@ -480,7 +480,7 @@ function treeBlock(ctx) {
   return codeFence('', dirs.slice(0, 100).join('\n') || '(no subdirectories)');
 }
 function git(root, argsArr) {
-  const r = spawnSync('git', argsArr, { cwd: root, encoding: 'utf8' });
+  const r = childProcess.spawnSync('git', argsArr, { cwd: root, encoding: 'utf8' });
   return r.status === 0 ? r.stdout.trim() : '';
 }
 function gitActivityBlock(ctx) {
@@ -579,7 +579,8 @@ function checkAiAvailable(args) {
   if (process.env.CLAUDECODE && args.aiCli === 'claude') {
     return { useAi: false, reason: 'Running inside a Claude Code session — nested sessions not supported. Pass --ai gemini or a different CLI.' };
   }
-  const which = spawnSync('which', [args.aiCli], { encoding: 'utf8' });
+  const lookupCmd = process.platform === 'win32' ? 'where' : 'which';
+  const which = childProcess.spawnSync(lookupCmd, [args.aiCli], { encoding: 'utf8' });
   if (which.status !== 0 || !which.stdout || !which.stdout.trim()) {
     return { useAi: false, reason: `${args.aiCli} CLI not found on PATH. Install ${args.aiCli}, or pass --ai <other-cli>.` };
   }
@@ -616,7 +617,7 @@ function stripModelPreamble(text) {
 
 function callAi(aiCli, prompt) {
   try {
-    const r = spawnSync(aiCli, ['-p', prompt], { encoding: 'utf8', timeout: 120000 });
+    const r = childProcess.spawnSync(aiCli, ['-p', prompt], { encoding: 'utf8', timeout: 120000 });
     const out = (r.stdout || '').trim();
     if (r.error || r.status !== 0 || !out) {
       log.warn(`${aiCli} returned empty for: ${prompt.slice(0, 60)}...`);
