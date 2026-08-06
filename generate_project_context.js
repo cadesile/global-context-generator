@@ -625,8 +625,12 @@ function stripModelPreamble(text) {
 }
 
 function callAi(aiCli, prompt) {
+  const PROMPT_ARG_LIMIT = 8 * 1024; // 8KB — stay well under OS ARG_MAX/Win32 command-line limits
   try {
-    const r = childProcess.spawnSync(aiCli, ['-p', prompt], { encoding: 'utf8', timeout: 120000 });
+    const isOversized = Buffer.byteLength(prompt, 'utf8') > PROMPT_ARG_LIMIT;
+    const r = isOversized
+      ? childProcess.spawnSync(aiCli, ['-p'], { input: prompt, encoding: 'utf8', timeout: 120000 })
+      : childProcess.spawnSync(aiCli, ['-p', prompt], { encoding: 'utf8', timeout: 120000 });
     const out = (r.stdout || '').trim();
     if (r.error || r.status !== 0 || !out) {
       log.warn(`${aiCli} returned empty for: ${prompt.slice(0, 60)}...`);

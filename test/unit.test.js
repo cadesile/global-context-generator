@@ -463,3 +463,37 @@ test('createIgnoreMatcher correctly splits CRLF line endings and compiles patter
   assert.ok(ignored('crlf_custom'), 'custom ignore CRLF pattern should match');
   assert.ok(!ignored('other_file.txt'), 'non-matching file should not be ignored');
 });
+
+test('callAi routes prompts over 8KB through a temp file, not argv', () => {
+  const spawnSyncMod = require('node:child_process');
+  const realSpawnSync = spawnSyncMod.spawnSync;
+  let capturedArgs = null;
+  spawnSyncMod.spawnSync = (cmd, args, opts) => {
+    capturedArgs = args;
+    return { stdout: 'ok', status: 0, error: null };
+  };
+  try {
+    const bigPrompt = 'x'.repeat(9000);
+    g.callAi('fake-cli', bigPrompt);
+    // The oversized prompt must not appear verbatim as an argv element.
+    assert.ok(!capturedArgs.includes(bigPrompt), 'oversized prompt leaked into argv');
+  } finally {
+    spawnSyncMod.spawnSync = realSpawnSync;
+  }
+});
+
+test('callAi still passes short prompts directly as an argv element', () => {
+  const spawnSyncMod = require('node:child_process');
+  const realSpawnSync = spawnSyncMod.spawnSync;
+  let capturedArgs = null;
+  spawnSyncMod.spawnSync = (cmd, args, opts) => {
+    capturedArgs = args;
+    return { stdout: 'ok', status: 0, error: null };
+  };
+  try {
+    g.callAi('fake-cli', 'short prompt');
+    assert.ok(capturedArgs.includes('short prompt'));
+  } finally {
+    spawnSyncMod.spawnSync = realSpawnSync;
+  }
+});
