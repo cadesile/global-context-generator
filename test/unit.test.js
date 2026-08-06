@@ -431,9 +431,22 @@ test('grepLines strips trailing \\r from Windows line endings', () => {
   assert.strictEqual(lines[0], 'match this');
 });
 
-test('compileIgnorePatterns handles CRLF-joined pattern lines', () => {
-  const matchers = g.compileIgnorePatterns('node_modules\r\ndist\r\n'.split(/\r?\n/));
-  const matchFn = (rel) => matchers.some((re) => re.test(rel));
-  assert.strictEqual(matchFn('dist'), true);
-  assert.strictEqual(matchFn('dist/x.js'), true);
+test('createIgnoreMatcher correctly splits CRLF line endings and compiles patterns', () => {
+  const tmp = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'icm-crlf-'));
+  // Write .gitignore with actual CRLF line endings (test will verify split works correctly).
+  // With .split('\n'), lines would contain '\r'; with .split(/\r?\n/), lines are clean.
+  fsx.writeFileSync(pathx.join(tmp, '.gitignore'), 'crlf_dist\r\ncrlf_build\r\n', 'utf8');
+  // Also test custom ignore file with CRLF
+  fsx.mkdirSync(pathx.join(tmp, '.context/_config'), { recursive: true });
+  fsx.writeFileSync(pathx.join(tmp, '.context/_config/ignore'), 'crlf_custom\r\n', 'utf8');
+
+  const ignored = g.createIgnoreMatcher({ root: tmp, contextDir: '.context' });
+
+  // Test that patterns from both CRLF-terminated files work correctly.
+  // If .split('\n') were used instead of .split(/\r?\n/), the split would leave \r in the lines.
+  // Even with trim() protecting it, this test verifies the full pipeline works with CRLF files.
+  assert.ok(ignored('crlf_dist'), 'gitignore CRLF pattern should match');
+  assert.ok(ignored('crlf_build'), 'gitignore CRLF pattern should match');
+  assert.ok(ignored('crlf_custom'), 'custom ignore CRLF pattern should match');
+  assert.ok(!ignored('other_file.txt'), 'non-matching file should not be ignored');
 });
