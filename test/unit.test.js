@@ -81,6 +81,19 @@ test('parseArgs --dir', () => {
   assert.strictEqual(g.parseArgs(['--dir', '/some/place']).dir, '/some/place');
 });
 
+test('parseArgs throws when a value flag is missing its value', () => {
+  assert.throws(() => g.parseArgs(['--ai']), /--ai requires a value/);
+});
+
+test('parseArgs throws when --context-dir is last with no value', () => {
+  assert.throws(() => g.parseArgs(['--depth', '3', '--context-dir']), /--context-dir requires a value/);
+});
+
+test('parseArgs still accepts --debug-detection as the last, valueless flag', () => {
+  const a = g.parseArgs(['--ai', 'gemini', '--debug-detection']);
+  assert.strictEqual(a.debugDetection, true);
+});
+
 test('stripModelPreamble removes leaked self-talk/routing sentences but keeps real content', () => {
   assert.strictEqual(
     g.stripModelPreamble('This is a plain content-generation task (writing a doc summary), not creative feature work or a coding task — no skill applies here.\n\nThe project is a Symfony API.'),

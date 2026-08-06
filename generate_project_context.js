@@ -28,13 +28,22 @@ const log = {
 // ── CLI ──────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const args = { aiCli: 'claude', contextDir: '.context', treeDepth: 3, debugDetection: false, dir: '.' };
+  const nextValue = (i, flag) => {
+    if (i + 1 >= argv.length) throw new Error(`${flag} requires a value`);
+    return argv[i + 1];
+  };
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
-      case '--ai': args.aiCli = argv[++i]; break;
-      case '--context-dir': args.contextDir = argv[++i]; break;
-      case '--depth': args.treeDepth = parseInt(argv[++i], 10); if (Number.isNaN(args.treeDepth)) args.treeDepth = 3; break;
+      case '--ai': args.aiCli = nextValue(i, '--ai'); i++; break;
+      case '--context-dir': args.contextDir = nextValue(i, '--context-dir'); i++; break;
+      case '--depth': {
+        const v = nextValue(i, '--depth'); i++;
+        args.treeDepth = parseInt(v, 10);
+        if (Number.isNaN(args.treeDepth)) args.treeDepth = 3;
+        break;
+      }
       case '--debug-detection': args.debugDetection = true; break;
-      case '--dir': args.dir = argv[++i]; break;
+      case '--dir': args.dir = nextValue(i, '--dir'); i++; break;
       default: throw new Error(`Unknown option: ${argv[i]}`);
     }
   }
