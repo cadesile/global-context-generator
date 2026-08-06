@@ -50,7 +50,7 @@ function isDir(p) { try { return fs.statSync(p).isDirectory(); } catch { return 
 
 function grepLines(content, regex, limit = Infinity) {
   const out = [];
-  for (const line of content.split('\n')) {
+  for (const line of content.split(/\r?\n/)) {
     if (regex.test(line)) { out.push(line); if (out.length >= limit) break; }
   }
   return out;
@@ -102,9 +102,9 @@ function compileIgnorePatterns(lines) {
 function createIgnoreMatcher({ root, contextDir }) {
   const lines = [...DEFAULT_IGNORES];
   const gitignore = readText(path.join(root, '.gitignore'));
-  if (gitignore) lines.push(...gitignore.split('\n'));
+  if (gitignore) lines.push(...gitignore.split(/\r?\n/));
   const custom = readText(path.join(root, contextDir, '_config', 'ignore'));
-  if (custom) lines.push(...custom.split('\n'));
+  if (custom) lines.push(...custom.split(/\r?\n/));
   lines.push('/' + contextDir.replace(/\/+$/, ''));
   const matchers = compileIgnorePatterns(lines);
   return (relPath) => matchers.some((re) => re.test(relPath));
@@ -350,7 +350,7 @@ function detectDatabases(root, appDir) {
     const content = readText(path.join(root, appDir, f)) ?? readText(path.join(root, f));
     if (!content) continue;
     // Strip comment lines to avoid false positives from commented-out examples (e.g. Symfony's default .env)
-    const lc = content.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n').toLowerCase();
+    const lc = content.split(/\r?\n/).filter((l) => !l.trimStart().startsWith('#')).join('\n').toLowerCase();
     if (lc.includes('mysql')) hints.add('MySQL');
     if (lc.includes('postgres')) hints.add('PostgreSQL');
     if (lc.includes('mongodb')) hints.add('MongoDB');
@@ -414,8 +414,8 @@ function migrationsBlock(ctx) {
   return out;
 }
 function envBlock(ctx) {
-  const mask = (c) => c.split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.replace(/=.*/, '=***')).join('\n');
-  const plain = (c) => c.split('\n').filter((l) => l && !l.startsWith('#')).join('\n');
+  const mask = (c) => c.split(/\r?\n/).filter((l) => l && !l.startsWith('#')).map((l) => l.replace(/=.*/, '=***')).join('\n');
+  const plain = (c) => c.split(/\r?\n/).filter((l) => l && !l.startsWith('#')).join('\n');
   const candidates = [
     [path.join(ctx.root, ctx.appDir, '.env.example'), plain],
     [path.join(ctx.root, ctx.appDir, '.env'), mask],
@@ -486,7 +486,7 @@ function git(root, argsArr) {
 function gitActivityBlock(ctx) {
   const logOut = git(ctx.root, ['log', '--oneline', '-15']);
   if (!logOut) return '_No git history._\n';
-  const recent = git(ctx.root, ['diff', '--name-only', 'HEAD~5', 'HEAD']).split('\n').filter(Boolean).slice(0, 20);
+  const recent = git(ctx.root, ['diff', '--name-only', 'HEAD~5', 'HEAD']).split(/\r?\n/).filter(Boolean).slice(0, 20);
   let out = '**Recent commits:**\n' + codeFence('', logOut);
   if (recent.length) out += '\n**Recently changed files:**\n' + recent.map((f) => `- \`${f}\``).join('\n') + '\n';
   return out;
@@ -545,7 +545,7 @@ function injectContextReference(filePath, contextDir) {
 
   // Insert after the first H1 heading (and any blank lines that follow it),
   // or prepend to the file if there is no H1.
-  const lines = existing.split('\n');
+  const lines = existing.split(/\r?\n/);
   const h1Idx = lines.findIndex((l) => /^# /.test(l));
   let insertAt = 0;
   if (h1Idx !== -1) {
@@ -794,7 +794,7 @@ function collectAiContextFiles(ctx) {
   const envRel = appPrefix('.env');
   const envContent = readText(path.join(ctx.root, envRel));
   if (envContent !== null) {
-    const masked = envContent.split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.replace(/=.*/, '=***')).join('\n');
+    const masked = envContent.split(/\r?\n/).filter((l) => l && !l.startsWith('#')).map((l) => l.replace(/=.*/, '=***')).join('\n');
     out += `### ${envRel} (masked)\n\`\`\`\n${masked}\n\`\`\`\n\n`;
   }
   if (ctx.detection.modelsDir) {
@@ -891,7 +891,7 @@ function extractDomainNotes(ctx) {
       }
       tableBuf = [];
     };
-    for (const line of content.split('\n')) {
+    for (const line of content.split(/\r?\n/)) {
       const isTableRow = /^\s*\|.*\|\s*$/.test(line);
       if (!isTableRow) flushTable();
 
@@ -972,7 +972,7 @@ function extractDeclaredFieldNames(fenceText) {
 // substring in an unrelated entity's dump).
 function annotateWithDomainNotes(md, notes, gotchas = []) {
   if (!md) return md;
-  const lines = md.split('\n');
+  const lines = md.split(/\r?\n/);
 
   // Pass 1: collect each entity's declared field names from its fence block.
   const entityFields = new Map(); // entityName -> Set<fieldName>
@@ -1110,7 +1110,7 @@ function stripGeneratedWrapper(renderedContent, h1Title) {
   // Drop the exact line-shapes annotateWithDomainNotes injects (see its
   // implementation above — these three are the ONLY things it ever adds).
   out = out
-    .split('\n')
+    .split(/\r?\n/)
     .filter((line) =>
       !/^> \*\*Purpose:\*\* /.test(line) &&
       line !== '> _No hand-written notes found in CLAUDE.md/AGENTS.md/README.md for this name._' &&
@@ -1128,7 +1128,7 @@ function slugForPath(rel) {
 }
 
 function mdDigest(content) {
-  const lines = content.split('\n');
+  const lines = content.split(/\r?\n/);
   const title = (lines.find((l) => /^# /.test(l)) || '').replace(/^# /, '');
   const headings = lines.filter((l) => /^#{2,6} /.test(l));
   const wordCount = content.split(/\s+/).filter(Boolean).length;
@@ -1527,7 +1527,7 @@ Output only the above sections — no preamble, no trailing commentary.`);
   if (ai.useAi) {
     const keyFiles = collectAiContextFiles(ctx);
     const gitLog = git(root, ['log', '--oneline', '-10']) || 'No git history';
-    const gitRecent = git(root, ['diff', '--name-only', 'HEAD~5', 'HEAD']).split('\n').slice(0, 20).join('\n');
+    const gitRecent = git(root, ['diff', '--name-only', 'HEAD~5', 'HEAD']).split(/\r?\n/).slice(0, 20).join('\n');
 
     log.info(`Calling ${args.aiCli} — project overview...`);
     const overview = callAi(args.aiCli, `You are generating documentation for a software project.

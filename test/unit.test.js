@@ -423,3 +423,17 @@ test('checkAiAvailable uses "where" lookup on win32, "which" elsewhere', () => {
     spawnSyncMod.spawnSync = realSpawnSync;
   }
 });
+
+test('grepLines strips trailing \\r from Windows line endings', () => {
+  const content = 'foo bar\r\nmatch this\r\nbaz\r\n';
+  const lines = g.grepLines(content, /^match this$/);
+  assert.strictEqual(lines.length, 1);
+  assert.strictEqual(lines[0], 'match this');
+});
+
+test('compileIgnorePatterns handles CRLF-joined pattern lines', () => {
+  const matchers = g.compileIgnorePatterns('node_modules\r\ndist\r\n'.split(/\r?\n/));
+  const matchFn = (rel) => matchers.some((re) => re.test(rel));
+  assert.strictEqual(matchFn('dist'), true);
+  assert.strictEqual(matchFn('dist/x.js'), true);
+});
