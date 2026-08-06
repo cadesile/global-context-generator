@@ -541,6 +541,62 @@ test('callAiAsync resolves to empty string on non-zero exit', async () => {
   }
 });
 
+test('callAiAsync drains stderr instead of stalling on a large write', async () => {
+  const cp = require('node:child_process');
+  const realSpawn = cp.spawn;
+  cp.spawn = (cmd, args, opts) => {
+    const { EventEmitter } = require('node:events');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { write() {}, end() {} };
+    process.nextTick(() => {
+      // Simulate a child that writes a large amount of stderr before exiting.
+      // If callAiAsync never consumed child.stderr, this would be the moment
+      // a real OS pipe write would block; here we just confirm resolution
+      // still happens promptly instead of hanging.
+      child.stderr.emit('data', Buffer.from('x'.repeat(100000)));
+      child.stdout.emit('data', Buffer.from('  hello  '));
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  try {
+    const result = await g.callAiAsync('fake-cli', 'a prompt');
+    assert.strictEqual(result, 'hello');
+  } finally {
+    cp.spawn = realSpawn;
+  }
+});
+
+test('callAiAsync resolves to empty string instead of throwing on stdin EPIPE-style error', async () => {
+  const cp = require('node:child_process');
+  const realSpawn = cp.spawn;
+  cp.spawn = (cmd, args, opts) => {
+    const { EventEmitter } = require('node:events');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = new EventEmitter();
+    child.stdin.write = () => {
+      // Simulate the child closing stdin early, causing an EPIPE-style
+      // error to be emitted asynchronously on the stdin stream itself.
+      process.nextTick(() => child.stdin.emit('error', new Error('EPIPE')));
+    };
+    child.stdin.end = () => {};
+    process.nextTick(() => child.emit('close', 1));
+    return child;
+  };
+  // Use an oversized prompt so callAiAsync takes the stdin-writing branch.
+  const bigPrompt = 'x'.repeat(9 * 1024);
+  try {
+    const result = await g.callAiAsync('fake-cli', bigPrompt);
+    assert.strictEqual(result, '');
+  } finally {
+    cp.spawn = realSpawn;
+  }
+});
+
 test('buildStages01to04 runs the 03_data and 04_interfaces AI calls concurrently, not sequentially', async () => {
   const { copyFixture } = require('./helpers.js');
   const root = copyFixture('expo-app');

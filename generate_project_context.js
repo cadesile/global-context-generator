@@ -624,8 +624,11 @@ function stripModelPreamble(text) {
   return out.replace(/^\s+/, '');
 }
 
+// 8KB — stay well under OS ARG_MAX/Win32 command-line limits. Shared by callAi
+// and callAiAsync so the oversized-prompt threshold can't drift between them.
+const PROMPT_ARG_LIMIT = 8 * 1024;
+
 function callAi(aiCli, prompt) {
-  const PROMPT_ARG_LIMIT = 8 * 1024; // 8KB — stay well under OS ARG_MAX/Win32 command-line limits
   try {
     const isOversized = Buffer.byteLength(prompt, 'utf8') > PROMPT_ARG_LIMIT;
     const r = isOversized
@@ -644,7 +647,6 @@ function callAi(aiCli, prompt) {
 }
 
 function callAiAsync(aiCli, prompt) {
-  const PROMPT_ARG_LIMIT = 8 * 1024; // 8KB — stay well under OS ARG_MAX/Win32 command-line limits
   return new Promise((resolve) => {
     const isOversized = Buffer.byteLength(prompt, 'utf8') > PROMPT_ARG_LIMIT;
     let child;
@@ -662,6 +664,7 @@ function callAiAsync(aiCli, prompt) {
     const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
     const timer = setTimeout(() => { child.kill(); finish(''); }, 120000);
     child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', () => {});
     child.on('error', (e) => { clearTimeout(timer); log.warn(`${aiCli} failed: ${e.message}`); finish(''); });
     child.on('close', (code) => {
       clearTimeout(timer);
@@ -674,6 +677,7 @@ function callAiAsync(aiCli, prompt) {
       finish(stripModelPreamble(out));
     });
     if (isOversized) {
+      child.stdin.on('error', () => {});
       child.stdin.write(prompt);
       child.stdin.end();
     }
