@@ -1219,7 +1219,9 @@ function emptyManifest(repoName) {
 }
 function loadManifest(root, contextDir, repoName) {
   const m = readJson(path.join(root, contextDir, '_config', 'manifest.json'));
-  return (m && m.version === 1 && m.parsed_markdown) ? m : emptyManifest(repoName);
+  if (!m || m.version !== 1 || !m.parsed_markdown) return emptyManifest(repoName);
+  if (!m.stages) m.stages = {};
+  return m;
 }
 function saveManifest(root, contextDir, manifest) {
   const p = path.join(root, contextDir, '_config', 'manifest.json');
