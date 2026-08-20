@@ -1447,8 +1447,15 @@ function writeRouter(root, contextDir, { repoName, label, stageIndex, hasKnowled
 > Generated: ${new Date().toISOString()} · Stack: ${label} · Generator: v${GENERATOR_VERSION} (${GENERATOR_COMMIT})
 
 This folder is an **ICM (Interpretable Context Methodology)** context structure
-(https://arxiv.org/html/2603.16021v2): numbered stages, each with a CONTEXT.md
-contract (Inputs / Process / Outputs) and an output/ folder of focused markdown.
+(https://arxiv.org/html/2603.16021v2) — a folder hierarchy instead of one
+monolithic context file, so an agent loads only the couple thousand tokens
+relevant to its task instead of everything at once. Layers map onto this
+folder as: this router = Layer 1 (routing); each \`stages/NN_*/CONTEXT.md\` =
+Layer 2 (a stage contract — Inputs / Process / Outputs); each stage's
+\`output/\` = Layer 3/4 (the actual reference content). Stage boundaries are
+also human review points — edit a stage's output directly and it sticks,
+since regeneration reuses existing content rather than overwriting it (see
+"Writing to this folder" below).
 
 ## How to use this folder (for agents)
 
@@ -1463,6 +1470,16 @@ ${gapsNote}
 Regenerate with: \`node generate_project_context.js\`. Ignore rules live in
 \`_config/ignore\`; the parse ledger and per-stage extraction provenance in
 \`_config/manifest.json\`.
+
+## Writing to this folder
+
+- Match new content to the existing stage by **topic**, not file type — it belongs in that
+  stage's \`output/\`.
+- When you add a file by hand, update that stage's own \`CONTEXT.md\` Outputs list in the
+  same change, and this router's Stage index below if the summary changes.
+- **Don't invent a new top-level \`stages/NN_name/\`** without a human approving it first —
+  the numbering is meaningful and a rerun of the generator won't know about it.
+- Keep additions few, load-bearing, and true — not speculative.${hasKnowledgeGaps ? ' Genuine open questions belong in `KNOWLEDGE_GAPS.md`, not as guessed content in a stage output file.' : ''}
 
 ## Stage index
 
