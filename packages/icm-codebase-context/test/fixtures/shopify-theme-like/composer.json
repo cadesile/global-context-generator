@@ -1,0 +1,5 @@
+{
+  "require": {
+    "img/unrelated-internal-dep": "dev-stage"
+  }
+}

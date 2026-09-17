@@ -1,168 +1,107 @@
-# generate_project_context
+# icm-codebase-context
 
-Generates an ICM `.context/` folder structure for any project — numbered
-stages of focused markdown context that AI agents can navigate selectively,
-instead of one monolithic context file.
-Based on the Interpretable Context Methodology (https://arxiv.org/html/2603.16021v2).
+This repo is home to `packages/icm-codebase-context/` — a portable
+**skill package** implementing ICM (Interpretable Context Methodology,
+https://arxiv.org/html/2603.16021v2, reference implementation at
+github.com/RinDig/Interpretable-Context-Methodology) for documenting an
+existing codebase.
 
-## Requirements
+It used to be a Node script (`generate_project_context.js`) that shelled
+out to an AI CLI as a subprocess to mechanically generate a `.context/`
+folder. That approach has been retired — it fought the methodology rather
+than implementing it. ICM's own reference implementation has no generator
+script at all: it's natural-language instructions a *live agent* follows
+conversationally, exploring the real repo with its own tools, pausing at
+human-reviewed checkpoints, and running an audit before writing anything.
+A subprocess-driven script structurally can't do any of that, and in
+practice it produced confidently wrong results (see "Why this exists"
+below).
 
-- Node.js >= 18 (no npm dependencies)
-- git _(optional — enables git activity + AI focus sections)_
-- Claude CLI or Gemini CLI — **required**. This generator's schema/entity/route/controller/service extraction is entirely AI-driven; there is no static-regex fallback.
+## What it is
 
-## Installation
+A folder of routed, stage-by-stage markdown that a future agent session
+loads selectively instead of pulling one monolithic context file into
+every conversation:
 
-Run it from within this repository, pointing `--dir` at the target project —
-no need to copy `generate_project_context.js` anywhere:
+```
+Layer 0: SKILL.md            "Where am I?"
+Layer 1: CONTEXT.md          "Where do I go?"
+Layer 2: Stage CONTEXT.md    "What do I do?"
+Layer 3: Reference material  "What rules apply?"
+Layer 4: Working artifacts   "What am I working with?"
+```
+
+Stage boundaries are also human-review points: each stage's `CONTEXT.md`
+defines Checkpoints (the agent pauses and presents a finding before
+continuing) and an Audit (a checklist the agent runs before writing
+output). A human can hand-edit any `output/` file directly and the next
+run treats that edit as authoritative.
+
+## Installing it into a repo
 
 ```bash
-node /path/to/global-context-generator/generate_project_context.js --dir /path/to/target/project
+npx create-icm-context /path/to/your/project
 ```
 
-**Optional — global command**
+This is pure file-copy scaffolding — **no AI calls, no subprocess**. It:
+
+1. Copies the skill into `<target>/.agents/skills/icm-codebase-context/`
+   (deliberately not `.claude/skills/` — this works with any agent that
+   reads `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`, not just Claude Code).
+2. Creates an empty `<target>/.context/` skeleton (a router file plus one
+   directory per stage — no content yet).
+3. Injects a pointer block into the target repo's `CLAUDE.md`
+   (or `.claude/CLAUDE.md`, `AGENTS.md`, `GEMINI.md` — first match wins;
+   creates `CLAUDE.md` if none exist), telling any agent that reads it to
+   follow the installed skill and treat `.context/` as the source of truth
+   for this codebase's structure, stack, data model, and interfaces.
+
+## "Warming" — how the actual content gets written
+
+There is no separate warm command. Warming is just the pointer block's own
+instruction, acted out by whatever agent session is already running: open
+the repo, read `CLAUDE.md`, see the pointer, read
+`.agents/skills/icm-codebase-context/SKILL.md`, and — if
+`.context/stages/*/` is still empty — start stage `01_overview` right then,
+in that same session. Every later session gets the same instruction: if
+you make a change that affects a stage's documented content (a schema
+change, a new route, a new module), update that stage's `output/` as part
+of finishing the task, not as a separate step.
+
+## Stages
+
+| Stage | Covers |
+|---|---|
+| `01_overview` | Stack, language, framework, dev environment |
+| `02_architecture` | Directory layout, module boundaries, git activity |
+| `03_data` | Schema, entities, client-side state, migrations |
+| `04_interfaces` | Routes, controllers, services, external API surface |
+| `05_documentation` | Index of existing markdown docs already in the repo |
+| `06_synthesis` | Cross-stage overview, architectural notes, current focus |
+
+## Why this exists
+
+A real run of the old script against a Shopify Liquid theme project
+misdetected it as a generic "php" project — a near-empty `composer.json`
+sitting next to a fully Shopify-shaped `package.json` and directory tree
+was enough to short-circuit detection before the script's AI pass ever ran.
+The fix isn't a smarter heuristic; it's removing the assumption that a
+script can reliably substitute for an agent actually looking at the repo
+and a human confirming what it found. Stage `01_overview`'s checkpoint
+exists specifically to catch this class of mistake — see
+`packages/icm-codebase-context/skill/stages/01_overview/CONTEXT.md`.
+
+## Repo layout
+
+```
+packages/icm-codebase-context/   # the package: bin/install.js, lib/, skill/, test/
+docs/2603.16021v2.pdf            # the ICM paper
+docs/superpowers/                # dated design records from this repo's history — not living docs
+```
+
+## Developing this package
 
 ```bash
-cp generate_project_context.js /usr/local/bin/generate_project_context
-chmod +x /usr/local/bin/generate_project_context
-```
-
-## Usage
-
-```bash
-node generate_project_context.js [--ai <claude|gemini>] [--context-dir <dir>] [--depth <n>] [--dir <path>] [--debug-detection]
-```
-
-| Flag | Description | Default |
-|---|---|---|
-| `--ai <claude\|gemini>` | Choose which AI CLI to use | `claude` |
-| `--context-dir <dir>` | Directory to write the context tree into | `.context` |
-| `--depth <n>` | Directory tree depth | `3` |
-| `--dir <path>` | Target project root (run the generator from anywhere) | current directory |
-| `--debug-detection` | Print detected stack/environment JSON and exit — read-only, writes nothing | off |
-
-### Examples
-
-```bash
-# Generate context for the current project
-node generate_project_context.js
-
-# Generate context for another project without cd-ing into it
-node ~/Projects/global-context-generator/generate_project_context.js --ai gemini --dir /some/place/local
-```
-
-## Stack detection
-
-The generator runs a four-step resolution process before writing anything:
-
-1. **Root scan** — looks for framework manifests (`composer.json`, `package.json`, `go.mod`, `Gemfile`, `requirements.txt`) at the project root.
-2. **Subdir scan** — scans common backend directory names (`backend/`, `api/`, `server/`, `app/`, `web/`) for the same manifests, independent of the root scan.
-3. **AI disambiguation** — when the result is ambiguous (e.g. a frontend `package.json` at root _and_ a Symfony `composer.json` in `backend/`), the AI CLI reads `CLAUDE.md`, `README.md`, and the manifests to determine which stack is primary and where the app code lives.
-4. **TTY fallback** — if AI is unavailable and the stack is still ambiguous, you are prompted to enter the app subdirectory path.
-
-This means projects with a frontend build tool (`package.json` for webpack, Vite, etc.) co-located alongside a PHP, Go, or Python backend are handled correctly — the primary backend stack always wins.
-
-Resolved stack details (framework, `appDir`, `primaryExt`, `modelsDir`, etc.) flow into every subsequent stage so entity paths, schema scanners, section labels, and DB hints are all computed from the correct stack.
-
-## Output structure
-
-```
-.context/
-  CONTEXT.md                     # router — stage index, links into each stage
-  KNOWLEDGE_GAPS.md               # AI review of the whole folder — open questions for a human (only when AI is available)
-  _config/
-    ignore                       # seeded once with defaults; never overwritten
-    manifest.json                # parse ledger (written last, after all stages)
-  stages/
-    01_overview/     CONTEXT.md + output/   # stack, environment, metrics
-    02_architecture/ CONTEXT.md + output/   # directory structure, git activity
-    03_data/         CONTEXT.md + output/   # schema, entities, state, migrations
-    04_interfaces/   CONTEXT.md + output/   # routes, controllers, services, API spec
-    05_documentation/CONTEXT.md + output/   # markdown docs index + per-file digests/summaries
-    06_synthesis/    CONTEXT.md + output/   # AI overview, architecture notes, dev focus (skipped without AI)
-```
-
-Each stage's `CONTEXT.md` documents its own **Inputs**, **Process**, and
-**Outputs** so an agent can decide whether to open that stage at all.
-
-## The ledger (incremental re-runs)
-
-`_config/manifest.json` tracks every markdown file the documentation stage has
-parsed, keyed by repo-relative path:
-
-- **sha256 skip** — if a file's hash and its existing digest/summary output are
-  unchanged since the last run, it's skipped (no re-parse, no AI call).
-- **Deletion cleanup** — files removed from the repo since the last run are
-  dropped from the ledger and their digest/summary output is deleted.
-- **Manifest written last** — `manifest.json` is only written after every
-  stage (including the router) has finished, so a run that fails partway
-  through never leaves a ledger pointing at outputs that don't exist.
-
-## Knowledge-gap review
-
-After all six stages are written, if an AI CLI is available, one more AI
-call reviews the whole `.context/` folder — prioritizing `03_data` and
-`04_interfaces`, plus the extraction-provenance table — and writes
-`.context/KNOWLEDGE_GAPS.md`: a list of open questions the generator
-couldn't answer from the code or docs alone. Each entry has a short topic,
-the specific open question, and why it matters, e.g. a business rule that
-isn't written down anywhere, or a section that only came from a
-static-scan fallback and was never verified live.
-
-This file is meant to be **triaged by a human**, not auto-resolved by the
-tool — answer the questions yourself (e.g. by adding them to
-CLAUDE.md/AGENTS.md, which the generator already merges into
-`entities.md`/`services.md` on the next run) or file them as tickets.
-
-## Ignore rules
-
-Three layers apply in order, each adding to the last:
-
-1. **Built-in defaults** — `node_modules`, `vendor`, `.git`, `dist`, `build`,
-   `.next`, `__pycache__`, `.venv`, etc.
-2. **Repo `.gitignore`** — read from the project root, if present.
-3. **`.context/_config/ignore`** — seeded once with the defaults on first run,
-   then left alone; edit it freely to exclude project-specific paths. It is
-   never overwritten by later runs.
-
-Patterns use gitignore-style syntax (comments, blank lines, `*`/`?`/`**`
-globs, trailing `/` for directories, leading `/` to anchor at the repo root).
-**Negation (`!`) is not supported** and such lines are ignored.
-
-## Schema/entity/route/controller/service extraction
-
-`schema.md`, `entities.md`, `state.md`, `routes.md`, `controllers.md`, and
-`services.md` are produced by a two-pass AI process, not per-framework
-static extraction — this works on any stack (including ones with no known
-MVC convention, like WordPress) since it reasons from the codebase's
-structure rather than a fixed enum of framework layouts:
-
-1. **Discovery** (1 AI call): the generator shows the AI the directory tree
-   and manifest file, and asks which paths define the data model, routes,
-   business logic, and client-side state.
-2. **Generation** (up to 6 AI calls, one per output file): each file's
-   content is generated from the paths discovery named for its category. If
-   the file already exists from a previous run, the AI is asked to update
-   it — keeping what's still accurate, adding what's new — rather than
-   regenerating from scratch.
-
-Generation results are cached per file in `_config/manifest.json`: a rerun
-skips the AI call and reuses the existing file when the underlying source
-hasn't changed AND the last review was within 30 days; otherwise it
-re-reviews. Stack/dev-env/DB detection, the directory tree, git activity,
-and file counts stay fully deterministic (no AI involved) — only the six
-files above require an AI CLI to be populated.
-
-## For agents
-
-Read `.context/CONTEXT.md` first; it's the router into the stage index. Load
-only the stage `output/` files you actually need for the task at hand instead
-of pulling the whole tree into context. If the router links to
-`KNOWLEDGE_GAPS.md`, that file lists open questions the generation run
-flagged — read it as a caveat list, not as extracted fact.
-
-## Tests
-
-```bash
-node --test
+cd packages/icm-codebase-context
+node --test test/
 ```

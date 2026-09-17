@@ -1,0 +1,10 @@
+{
+  "name": "fixture-theme",
+  "description": "Fixture modeling a Shopify theme with a misleading near-empty composer.json alongside it — the real bug case this package's stage 01_overview checkpoint targets.",
+  "keywords": ["shopify", "theme"],
+  "dependencies": {
+    "@shopify/theme-a11y": "^6.0.0",
+    "@shopify/theme-cart": "^7.0.0",
+    "@shopify/theme-sections": "^2.0.0"
+  }
+}

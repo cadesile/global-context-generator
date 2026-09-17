@@ -1,0 +1,22 @@
+{
+  "name": "create-icm-context",
+  "version": "1.0.0",
+  "description": "Scaffolds an ICM (Interpretable Context Methodology) codebase-context skill into a target repo — a live agent follows it to build and maintain .context/, no AI subprocess involved.",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "create-icm-context": "bin/install.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "skill",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
