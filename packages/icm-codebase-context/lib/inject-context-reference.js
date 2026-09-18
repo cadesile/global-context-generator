@@ -14,7 +14,16 @@ function exists(p) { try { fs.accessSync(p); return true; } catch { return false
 
 const CONTEXT_SENTINEL_START = '<!-- context-generator: start -->';
 const CONTEXT_SENTINEL_END = '<!-- context-generator: end -->';
-// Known AI agent instruction files, checked in priority order.
+// CLAUDE.md and AGENTS.md are always ensured (created if missing, injected if
+// present) — AGENTS.md specifically because it's an increasingly vendor-
+// neutral convention many agents beyond Claude Code check for by default, so
+// always having it maximizes which agents actually see the pointer.
+// .claude/CLAUDE.md and GEMINI.md are tool-specific opt-ins: only touched if
+// the target repo already uses them, never created from scratch.
+const ALWAYS_ENSURED_FILES = ['CLAUDE.md', 'AGENTS.md'];
+const INJECT_IF_EXISTS_FILES = ['.claude/CLAUDE.md', 'GEMINI.md'];
+// The full set this module can touch, in original priority order — kept for
+// anything that wants to introspect "every file this module knows about."
 const AI_INSTRUCTION_FILES = ['CLAUDE.md', '.claude/CLAUDE.md', 'AGENTS.md', 'GEMINI.md'];
 
 function buildContextBlock(contextDir, skillPath) {
@@ -28,9 +37,12 @@ function buildContextBlock(contextDir, skillPath) {
     '',
     `Read and follow \`${skillPath}/SKILL.md\` for how to use and maintain \`${contextDir}/\`.`,
     '',
-    `**First time in this repo:** if \`${contextDir}/stages/*/output/\` is empty or`,
-    'missing, run stage `01_overview` now, in this session, before doing',
-    "anything else (see the skill's CONTEXT.md).",
+    '**If this is the first time you (any agent) are reading this file in a',
+    `session:** tell the human \`${contextDir}/\` and this skill are available,`,
+    `before doing anything else. If \`${contextDir}/stages/*/output/\` is empty`,
+    'or missing, explicitly ask whether to run stage `01_overview` now, in this',
+    "session, to set it up (see the skill's CONTEXT.md) — don't just silently",
+    'skip it and don\'t silently run it unasked either.',
     '',
     '**Finishing any task:** if your change affects a stage\'s documented content',
     '(schema/migration → `03_data`, new routes/services → `04_interfaces`,',
@@ -82,18 +94,22 @@ function injectContextReference(filePath, contextDir, skillPath) {
 
 function updateAiInstructionFiles(root, contextDir, skillPath) {
   const results = [];
-  for (const rel of AI_INSTRUCTION_FILES) {
+
+  // CLAUDE.md and AGENTS.md: always ensured, created from scratch if missing.
+  for (const rel of ALWAYS_ENSURED_FILES) {
+    const abs = path.join(root, rel);
+    const result = injectContextReference(abs, contextDir, skillPath);
+    results.push({ rel, result });
+  }
+
+  // .claude/CLAUDE.md and GEMINI.md: tool-specific, only touched if already present.
+  for (const rel of INJECT_IF_EXISTS_FILES) {
     const abs = path.join(root, rel);
     if (!exists(abs)) continue;
     const result = injectContextReference(abs, contextDir, skillPath);
     results.push({ rel, result });
   }
-  // No AI instruction file found — create CLAUDE.md so agents always have the pointer
-  if (results.length === 0) {
-    const abs = path.join(root, 'CLAUDE.md');
-    const result = injectContextReference(abs, contextDir, skillPath);
-    results.push({ rel: 'CLAUDE.md', result });
-  }
+
   return results;
 }
 
@@ -101,6 +117,8 @@ module.exports = {
   CONTEXT_SENTINEL_START,
   CONTEXT_SENTINEL_END,
   AI_INSTRUCTION_FILES,
+  ALWAYS_ENSURED_FILES,
+  INJECT_IF_EXISTS_FILES,
   buildContextBlock,
   injectContextReference,
   updateAiInstructionFiles,

@@ -13,11 +13,16 @@ npx create-icm-context /path/to/your/project
 ```
 
 This copies the skill to `<project>/.agents/skills/icm-codebase-context/`,
-scaffolds an empty `<project>/.context/` skeleton, injects a pointer into
-`<project>/CLAUDE.md` (or `.claude/CLAUDE.md`/`AGENTS.md`/`GEMINI.md`,
-whichever exists first) telling any agent that reads it to follow the
-skill and treat `.context/` as this codebase's source of truth, and adds a
-managed block to `.gitignore` for agent-specific pointer/local files.
+scaffolds an empty `<project>/.context/` skeleton, and adds a managed block
+to `.gitignore` for agent-specific pointer/local files.
+
+It also injects a pointer into `<project>/CLAUDE.md` **and**
+`<project>/AGENTS.md` — both always created if missing, or updated in
+place if they already exist. `AGENTS.md` specifically because it's a
+vendor-neutral convention a growing set of agents (not just Claude Code)
+check by default, so always having it maximizes which agents actually see
+the pointer. `.claude/CLAUDE.md` and `GEMINI.md` are also updated, but only
+if the target repo already has them — never created from scratch.
 
 `.context/` is committed and is the master. The per-agent pointer files
 (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, and their `*.local.*` variants) are
@@ -28,13 +33,15 @@ notices `.context/` exists but no pointer does.
 
 ## What happens next
 
-Open an agent session in the target repo. The injected pointer tells it to
-read `.agents/skills/icm-codebase-context/SKILL.md` and, if
-`.context/stages/*/` is still empty, start stage `01_overview` immediately
-— exploring the real repo with its own tools, pausing at a checkpoint to
-confirm what it found with you, then writing output. Later sessions get
-the same instruction to keep each stage's output in sync with any change
-that affects it.
+Open an agent session in the target repo. The injected pointer tells
+whichever agent reads it, the first time it does so in a session, to tell
+you `.context/` and this skill are available and ask whether to run setup
+— not silently skip it, and not silently run it unasked. If you say yes
+and `.context/stages/*/` is still empty, it starts stage `01_overview`
+immediately, exploring the real repo with its own tools, pausing at a
+checkpoint to confirm what it found with you, then writing output. Later
+sessions get the same instruction to keep each stage's output in sync with
+any change that affects it.
 
 ## Layout
 

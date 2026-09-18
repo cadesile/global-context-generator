@@ -50,11 +50,17 @@ This is pure file-copy scaffolding — **no AI calls, no subprocess**. It:
    reads `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`, not just Claude Code).
 2. Creates an empty `<target>/.context/` skeleton (a router file plus one
    directory per stage — no content yet).
-3. Injects a pointer block into the target repo's `CLAUDE.md`
-   (or `.claude/CLAUDE.md`, `AGENTS.md`, `GEMINI.md` — first match wins;
-   creates `CLAUDE.md` if none exist), telling any agent that reads it to
-   follow the installed skill and treat `.context/` as the source of truth
-   for this codebase's structure, stack, data model, and interfaces.
+3. Injects a pointer block into the target repo's `CLAUDE.md` **and**
+   `AGENTS.md` — both are always created if missing, or injected into if
+   they already exist. (`AGENTS.md` specifically because it's an
+   increasingly vendor-neutral convention other agents beyond Claude Code
+   check for by default — always having it maximizes which agents see the
+   pointer.) `.claude/CLAUDE.md` and `GEMINI.md` are touched too, but only
+   if the target repo already uses them — never created from scratch. Every
+   pointer tells the agent to follow the installed skill and treat
+   `.context/` as the source of truth, and to explicitly surface this to
+   the human and ask before running setup, rather than staying silent or
+   running it unasked.
 4. Adds a managed block to the target repo's `.gitignore` covering
    agent-specific pointer and local-settings files (`CLAUDE.md`,
    `CLAUDE.local.md`, `.claude/settings.local.json`, `AGENTS.md`,

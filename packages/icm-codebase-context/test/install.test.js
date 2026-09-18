@@ -55,6 +55,32 @@ test('sentinel injection: creates CLAUDE.md when none exists', () => {
   assert.match(claude, /icm-codebase-context\/SKILL\.md/);
 });
 
+test('sentinel injection: always creates AGENTS.md too, not just CLAUDE.md', () => {
+  const target = mkScratchDir();
+  runInstaller(target);
+  const agents = fs.readFileSync(path.join(target, 'AGENTS.md'), 'utf8');
+  assert.match(agents, /context-generator: start/);
+  assert.match(agents, /\.context\/CONTEXT\.md/);
+});
+
+test('sentinel injection: injects into an existing AGENTS.md rather than skipping it', () => {
+  const target = mkScratchDir();
+  fs.writeFileSync(path.join(target, 'AGENTS.md'), '# Agent Notes\n\nExisting content.\n');
+  runInstaller(target);
+  const agents = fs.readFileSync(path.join(target, 'AGENTS.md'), 'utf8');
+  assert.match(agents, /context-generator: start/);
+  assert.match(agents, /Existing content\./);
+  // CLAUDE.md still gets created alongside it
+  assert.ok(fs.existsSync(path.join(target, 'CLAUDE.md')));
+});
+
+test('sentinel injection: does not create GEMINI.md or .claude/CLAUDE.md when absent', () => {
+  const target = mkScratchDir();
+  runInstaller(target);
+  assert.ok(!fs.existsSync(path.join(target, 'GEMINI.md')));
+  assert.ok(!fs.existsSync(path.join(target, '.claude/CLAUDE.md')));
+});
+
 test('sentinel injection: inserts after H1 in an existing CLAUDE.md with no sentinel', () => {
   const target = mkScratchDir();
   fs.writeFileSync(path.join(target, 'CLAUDE.md'), '# My Project\n\nSome existing notes.\n');
