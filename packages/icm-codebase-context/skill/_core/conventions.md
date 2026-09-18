@@ -42,7 +42,10 @@ every stage's `output/` for every task.
   and never contain the actual facts/rules — they point to where those live.
 - **Canonical Sources.** One home per fact. `shared/stack.md` is the only
   home for stack/language/app-dir facts — every stage references it, no
-  stage re-derives or restates it.
+  stage re-derives or restates it. `shared/last-sync.md` is the same idea
+  applied to staleness: the one record of which commit `.context/` was last
+  reviewed against. See `SKILL.md`'s Triggers table for the check itself —
+  this file doesn't restate that logic, only points to it.
 - **One-Way Cross-References.** If A points to B, B does not point back to A.
 - **Every output is an edit surface.** A human can hand-edit any file under
   `.context/stages/*/output/` directly. The next time you touch that stage,

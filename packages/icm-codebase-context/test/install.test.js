@@ -94,3 +94,40 @@ test('fails cleanly on a missing target directory', () => {
   const r = runInstaller(path.join(os.tmpdir(), 'icm-install-test-does-not-exist'));
   assert.notEqual(r.status, 0);
 });
+
+test('.gitignore: creates a managed block ignoring agent pointer/local files, not .context/', () => {
+  const target = mkScratchDir();
+  runInstaller(target);
+  const gitignore = fs.readFileSync(path.join(target, '.gitignore'), 'utf8');
+  assert.match(gitignore, /icm-codebase-context: start/);
+  assert.match(gitignore, /^CLAUDE\.md$/m);
+  assert.match(gitignore, /^CLAUDE\.local\.md$/m);
+  assert.match(gitignore, /^\.claude\/settings\.local\.json$/m);
+  assert.match(gitignore, /^AGENTS\.md$/m);
+  assert.match(gitignore, /^GEMINI\.md$/m);
+  assert.doesNotMatch(gitignore, /^\.context\/$/m);
+  assert.doesNotMatch(gitignore, /^\.agents\//m);
+});
+
+test('.gitignore: appends the managed block to an existing file without touching its content', () => {
+  const target = mkScratchDir();
+  fs.writeFileSync(path.join(target, '.gitignore'), 'node_modules/\n.DS_Store\n');
+  runInstaller(target);
+  const gitignore = fs.readFileSync(path.join(target, '.gitignore'), 'utf8');
+  assert.match(gitignore, /^node_modules\/$/m);
+  assert.match(gitignore, /^\.DS_Store$/m);
+  assert.match(gitignore, /icm-codebase-context: start/);
+});
+
+test('.gitignore: replaces a stale managed block in place on a second run, not duplicated', () => {
+  const target = mkScratchDir();
+  runInstaller(target);
+  const before = fs.readFileSync(path.join(target, '.gitignore'), 'utf8');
+  fs.writeFileSync(path.join(target, '.gitignore'), before.replace('CLAUDE.md', 'STALE.md'));
+
+  runInstaller(target);
+  const after = fs.readFileSync(path.join(target, '.gitignore'), 'utf8');
+  assert.doesNotMatch(after, /STALE\.md/);
+  assert.match(after, /^CLAUDE\.md$/m);
+  assert.equal(after.split('icm-codebase-context: start').length - 1, 1);
+});

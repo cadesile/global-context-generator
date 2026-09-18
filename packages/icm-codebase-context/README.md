@@ -13,10 +13,18 @@ npx create-icm-context /path/to/your/project
 ```
 
 This copies the skill to `<project>/.agents/skills/icm-codebase-context/`,
-scaffolds an empty `<project>/.context/` skeleton, and injects a pointer
-into `<project>/CLAUDE.md` (or `.claude/CLAUDE.md`/`AGENTS.md`/`GEMINI.md`,
+scaffolds an empty `<project>/.context/` skeleton, injects a pointer into
+`<project>/CLAUDE.md` (or `.claude/CLAUDE.md`/`AGENTS.md`/`GEMINI.md`,
 whichever exists first) telling any agent that reads it to follow the
-skill and treat `.context/` as this codebase's source of truth.
+skill and treat `.context/` as this codebase's source of truth, and adds a
+managed block to `.gitignore` for agent-specific pointer/local files.
+
+`.context/` is committed and is the master. The per-agent pointer files
+(`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, and their `*.local.*` variants) are
+deliberately gitignored — thin, disposable references to `.context/`, not
+the truth themselves. Re-run the installer any time to regenerate them
+(e.g. after a fresh clone); the skill also recreates one on its own if it
+notices `.context/` exists but no pointer does.
 
 ## What happens next
 

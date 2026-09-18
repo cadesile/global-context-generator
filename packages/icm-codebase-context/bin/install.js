@@ -8,6 +8,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { updateAiInstructionFiles } = require('../lib/inject-context-reference');
+const { updateGitignore } = require('../lib/agent-gitignore');
 
 const CONTEXT_DIR = '.context';
 const SKILL_DIR_REL = '.agents/skills/icm-codebase-context';
@@ -80,6 +81,7 @@ function main() {
   const skillDest = copySkill(target);
   const { created } = scaffoldContextSkeleton(target);
   const results = updateAiInstructionFiles(target, CONTEXT_DIR, SKILL_DIR_REL);
+  const gitignoreResult = updateGitignore(target);
 
   process.stdout.write(`✓ Installed skill at ${path.relative(target, skillDest)}\n`);
   if (created.length) {
@@ -90,6 +92,7 @@ function main() {
   for (const { rel, result } of results) {
     process.stdout.write(`✓ ${rel}: ${result}\n`);
   }
+  process.stdout.write(`✓ .gitignore: ${gitignoreResult}\n`);
   process.stdout.write(
     '\nOpen an agent session in this repo now — the injected pointer tells it\n' +
     'to read the skill and run stage 01_overview if .context/ is still empty.\n',

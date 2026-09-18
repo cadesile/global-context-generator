@@ -20,10 +20,19 @@ There is no generator script here and no AI subprocess to call — **you**
 explore the repo with your own tools (Read/Glob/Grep/Bash) and write the
 output yourself, following each stage's instructions.
 
+`.context/` is the master, committed source of truth for this codebase.
+Per-agent pointer files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, etc.) are
+deliberately gitignored — thin, disposable pointers to `.context/`, not the
+truth themselves. Don't be thrown if one is missing; see the first trigger
+below.
+
 ## Triggers
 
 | Situation | Action |
 |---|---|
+| Starting work in this repo, `.context/shared/last-sync.md` exists | Run `git log <recorded-commit>..HEAD --oneline -- . ':!.context' ':!.agents'` (the path exclusions stop the check's own housekeeping commits — e.g. one that only updated `last-sync.md` — from tripping it). If this isn't a git repo, or the recorded commit is missing/invalid, skip silently. If the command returns any commits, list them briefly and ask the human whether to review them and update the relevant stage(s) before continuing — don't proceed as if `.context/` were current without asking |
+| `.context/shared/last-sync.md` doesn't exist yet | Nothing to compare against — skip the staleness check (expected before stage `01_overview` has ever completed) |
+| No `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` pointer exists, but `.context/` does | The pointer was gitignored and this is a fresh clone that hasn't installed one locally yet. Treat `.context/` as authoritative anyway — read `.context/CONTEXT.md` as normal — and recreate a local pointer file for whichever agent you are (run `npx create-icm-context .`, or write one by hand following the sentinel format any existing pointer uses) |
 | `.context/stages/*/output/` all empty or missing | This is first run ("warming") — start at `stages/01_overview/CONTEXT.md` now, in this session |
 | User asks "what stack/framework is this", "how is this structured", "where's the data model/API" | Read `.context/CONTEXT.md`, jump straight to the relevant stage's `output/` — don't re-run a stage that already has output just to answer a question |
 | You just changed schema, migrations, or persisted state | Update `.context/stages/03_data/output/*.md` before finishing the task |
@@ -47,3 +56,7 @@ output yourself, following each stage's instructions.
    writing to `output/`, not after.
 5. Write output only to `.context/stages/<stage>/output/` in the **target**
    repo (the one you're working in), never inside this skill folder itself.
+   After writing any stage's output, also update
+   `.context/shared/last-sync.md` with the current commit (`git rev-parse
+   HEAD`), today's date, and which stage(s) you just touched — this is what
+   the staleness check in the Triggers table above reads.

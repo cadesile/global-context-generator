@@ -55,6 +55,15 @@ This is pure file-copy scaffolding — **no AI calls, no subprocess**. It:
    creates `CLAUDE.md` if none exist), telling any agent that reads it to
    follow the installed skill and treat `.context/` as the source of truth
    for this codebase's structure, stack, data model, and interfaces.
+4. Adds a managed block to the target repo's `.gitignore` covering
+   agent-specific pointer and local-settings files (`CLAUDE.md`,
+   `CLAUDE.local.md`, `.claude/settings.local.json`, `AGENTS.md`,
+   `GEMINI.md`, and equivalents for other prominent agents). `.context/`
+   is the master, committed source of truth — these files are thin,
+   disposable pointers to it, not tracked in git. Anyone can regenerate
+   their own by re-running the installer; the skill itself also knows to
+   recreate one if it notices `.context/` exists but no pointer does (see
+   `skill/SKILL.md`'s Triggers table).
 
 ## "Warming" — how the actual content gets written
 

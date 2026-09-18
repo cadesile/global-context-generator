@@ -36,6 +36,11 @@ function buildContextBlock(contextDir, skillPath) {
     '(schema/migration → `03_data`, new routes/services → `04_interfaces`,',
     'new module/directory → `02_architecture`, etc.), update that stage\'s',
     '`output/` as part of finishing the task — not as a separate step.',
+    '',
+    `This file is a disposable, regenerable pointer (see .gitignore) — \`${contextDir}/\``,
+    'is the actual source of truth. If you ever find yourself in this repo',
+    `without a file like this one, but \`${contextDir}/\` exists, treat it as`,
+    'authoritative anyway and recreate this pointer for whichever agent you are.',
     CONTEXT_SENTINEL_END,
   ].join('\n');
 }
