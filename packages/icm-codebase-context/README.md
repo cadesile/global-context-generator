@@ -12,6 +12,12 @@ anywhere in this package; the installer only copies files.
 npx create-icm-context /path/to/your/project
 ```
 
+Not yet published to npm? Run it directly from this repo instead:
+
+```bash
+node packages/icm-codebase-context/bin/install.js /path/to/your/project
+```
+
 This copies the skill to `<project>/.agents/skills/icm-codebase-context/`,
 scaffolds an empty `<project>/.context/` skeleton, and adds a managed block
 to `.gitignore` for agent-specific pointer/local files.
@@ -42,6 +48,12 @@ immediately, exploring the real repo with its own tools, pausing at a
 checkpoint to confirm what it found with you, then writing output. Later
 sessions get the same instruction to keep each stage's output in sync with
 any change that affects it.
+
+You don't have to wait to be asked, either — saying "warm", "warm the
+context", or `/icm-context warm` in any live session explicitly triggers
+the same fill-in-what's-missing behavior (see `skill/SKILL.md`'s Triggers
+table). It's still not a script or subprocess, just a recognized phrase
+the agent acts on itself.
 
 ## Layout
 

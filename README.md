@@ -83,6 +83,15 @@ you make a change that affects a stage's documented content (a schema
 change, a new route, a new module), update that stage's `output/` as part
 of finishing the task, not as a separate step.
 
+There's still no separate warm *script* — nothing shells out to an AI CLI
+or subprocess (`skill/SKILL.md` rules that out explicitly). But a human
+doesn't have to wait to be asked either: saying "warm", "warm the
+context", or `/icm-context warm` in any live agent session is a
+recognized trigger (see `skill/SKILL.md`'s Triggers table) that tells the
+agent to fill every stage whose `output/` is still empty, in order,
+right then — respecting each stage's Checkpoints and Audits like any
+other run.
+
 ## Stages
 
 | Stage | Covers |
