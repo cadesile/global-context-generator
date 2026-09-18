@@ -71,6 +71,18 @@ This is pure file-copy scaffolding — **no AI calls, no subprocess**. It:
    recreate one if it notices `.context/` exists but no pointer does (see
    `skill/SKILL.md`'s Triggers table).
 
+## Usage
+
+Not published to npm yet, so `npx create-icm-context` will 404. Run the
+installer directly from this repo instead:
+
+```bash
+node packages/icm-codebase-context/bin/install.js /path/to/project
+```
+
+This does exactly what the `npx` form above does — same scaffolding, same
+pointer-injection, same `.gitignore` update — just invoked locally.
+
 ## "Warming" — how the actual content gets written
 
 There is no separate warm command. Warming is just the pointer block's own
