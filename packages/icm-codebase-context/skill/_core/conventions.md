@@ -45,7 +45,10 @@ every stage's `output/` for every task.
   stage re-derives or restates it. `shared/last-sync.md` is the same idea
   applied to staleness: the one record of which commit `.context/` was last
   reviewed against. See `SKILL.md`'s Triggers table for the check itself —
-  this file doesn't restate that logic, only points to it.
+  this file doesn't restate that logic, only points to it. `shared/token-savings.md`
+  is the one record of the estimated token cost of loading everything vs.
+  loading scoped-by-stage — an estimate (chars÷4 heuristic), not exact,
+  updated whenever any stage's output changes (see `SKILL.md` step 5).
 - **One-Way Cross-References.** If A points to B, B does not point back to A.
 - **Every output is an edit surface.** A human can hand-edit any file under
   `.context/stages/*/output/` directly. The next time you touch that stage,

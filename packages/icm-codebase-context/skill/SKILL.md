@@ -56,7 +56,13 @@ below.
    writing to `output/`, not after.
 5. Write output only to `.context/stages/<stage>/output/` in the **target**
    repo (the one you're working in), never inside this skill folder itself.
-   After writing any stage's output, also update
-   `.context/shared/last-sync.md` with the current commit (`git rev-parse
-   HEAD`), today's date, and which stage(s) you just touched — this is what
-   the staleness check in the Triggers table above reads.
+   After writing any stage's output, also update two shared files:
+   - `.context/shared/last-sync.md` — current commit (`git rev-parse HEAD`),
+     today's date, and which stage(s) you just touched. This is what the
+     staleness check in the Triggers table above reads.
+   - `.context/shared/token-savings.md` — re-measure with your own tools
+     (e.g. `wc -c` on the relevant files/dirs, ÷4 for an estimated token
+     count) and update the row(s) for whichever stage(s) you just touched,
+     the "everything" total, and the savings percentage. Don't recompute
+     rows for stages you didn't touch this pass unless their numbers are
+     actually stale.
