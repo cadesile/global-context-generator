@@ -41,7 +41,7 @@ test('installer copies the skill byte-for-byte and scaffolds .context/', () => {
   }
 
   assert.ok(fs.existsSync(path.join(target, '.context/CONTEXT.md')));
-  for (const stage of ['01_overview', '02_architecture', '03_data', '04_interfaces', '05_documentation', '06_synthesis']) {
+  for (const stage of ['01_overview', '02_architecture', '03_data', '04_interfaces', '05_ui', '06_documentation', '07_synthesis']) {
     assert.ok(fs.statSync(path.join(target, '.context/stages', stage)).isDirectory());
   }
 });

@@ -16,8 +16,9 @@
 | `02_architecture` (same shape) | {{S02_TOKENS}} |
 | `03_data` (same shape) | {{S03_TOKENS}} |
 | `04_interfaces` (same shape) | {{S04_TOKENS}} |
-| `05_documentation` (same shape) | {{S05_TOKENS}} |
-| `06_synthesis` (same shape) | {{S06_TOKENS}} |
+| `05_ui` (same shape) | {{S05_TOKENS}} |
+| `06_documentation` (same shape) | {{S06_TOKENS}} |
+| `07_synthesis` (same shape) | {{S07_TOKENS}} |
 
 **Typical saving vs. loading everything:** {{AVG_SAVINGS_PERCENT}}% (average
 across stages with existing output; leave a stage's row blank if it hasn't

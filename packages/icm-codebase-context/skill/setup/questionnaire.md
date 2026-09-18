@@ -18,7 +18,7 @@ before telling the human setup is complete.
    conventions, a gotcha, a "don't touch X" rule, a business rule that isn't
    written down anywhere in code? — `{{TRIBAL_KNOWLEDGE}}`
 5. Which markdown docs already in this repo (if any) are already canonical
-   and should just be indexed by stage `05_documentation`, not regenerated
+   and should just be indexed by stage `06_documentation`, not regenerated
    or duplicated? — `{{EXISTING_DOCS}}`
 
 When done:

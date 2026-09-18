@@ -17,8 +17,9 @@ const STAGE_NAMES = [
   '02_architecture',
   '03_data',
   '04_interfaces',
-  '05_documentation',
-  '06_synthesis',
+  '05_ui',
+  '06_documentation',
+  '07_synthesis',
 ];
 
 function parseArgs(argv) {

@@ -1,4 +1,4 @@
-# Stage 05: Documentation — Index Existing Docs
+# Stage 06: Documentation — Index Existing Docs
 
 ## Inputs
 
@@ -20,7 +20,7 @@
 
 ## Audit
 
-Before writing `.context/stages/05_documentation/output/index.md`:
+Before writing `.context/stages/06_documentation/output/index.md`:
 
 - [ ] Every path listed actually exists and is a markdown file you opened
 - [ ] No vendored/generated directory content was included
@@ -30,4 +30,4 @@ Before writing `.context/stages/05_documentation/output/index.md`:
 
 | File | Content |
 |---|---|
-| `.context/stages/05_documentation/output/index.md` | Path + one-line summary for every relevant markdown file in the repo |
+| `.context/stages/06_documentation/output/index.md` | Path + one-line summary for every relevant markdown file in the repo |

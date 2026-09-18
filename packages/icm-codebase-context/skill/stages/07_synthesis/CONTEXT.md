@@ -1,4 +1,4 @@
-# Stage 06: Synthesis — Cross-Stage Overview
+# Stage 07: Synthesis — Cross-Stage Overview
 
 ## Inputs
 
@@ -22,7 +22,7 @@
 
 ## Audit
 
-Before writing `.context/stages/06_synthesis/output/*.md`:
+Before writing `.context/stages/07_synthesis/output/*.md`:
 
 - [ ] Nothing here restates a fact verbatim that already lives in another stage's output — link to it instead
 - [ ] Every cross-stage connection claimed is backed by content actually present in the stages it connects
@@ -32,6 +32,6 @@ Before writing `.context/stages/06_synthesis/output/*.md`:
 
 | File | Content |
 |---|---|
-| `.context/stages/06_synthesis/output/overview.md` | Plain-language cross-stage summary |
-| `.context/stages/06_synthesis/output/architecture-notes.md` | Cross-stage architectural connections worth flagging |
-| `.context/stages/06_synthesis/output/current-focus.md` | What part of the codebase looks actively worked-on, if apparent |
+| `.context/stages/07_synthesis/output/overview.md` | Plain-language cross-stage summary |
+| `.context/stages/07_synthesis/output/architecture-notes.md` | Cross-stage architectural connections worth flagging |
+| `.context/stages/07_synthesis/output/current-focus.md` | What part of the codebase looks actively worked-on, if apparent |

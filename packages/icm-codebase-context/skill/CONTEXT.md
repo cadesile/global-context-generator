@@ -12,8 +12,9 @@
 | Understand directory layout / module boundaries | `stages/02_architecture/CONTEXT.md` |
 | Understand schema / entities / migrations / state | `stages/03_data/CONTEXT.md` |
 | Understand routes / controllers / services / external API | `stages/04_interfaces/CONTEXT.md` |
-| Index existing markdown docs already in the repo | `stages/05_documentation/CONTEXT.md` |
-| Produce a cross-stage overview / current-focus notes | `stages/06_synthesis/CONTEXT.md` |
+| Understand, or write/modify, UI/component code and its design system | `stages/05_ui/CONTEXT.md` |
+| Index existing markdown docs already in the repo | `stages/06_documentation/CONTEXT.md` |
+| Produce a cross-stage overview / current-focus notes | `stages/07_synthesis/CONTEXT.md` |
 
 Canonical facts (stack, primary language, app dir) live in `shared/stack.md`
 — every stage reads it, no stage re-derives it. See `_core/conventions.md`

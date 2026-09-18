@@ -100,8 +100,9 @@ other run.
 | `02_architecture` | Directory layout, module boundaries, git activity |
 | `03_data` | Schema, entities, client-side state, migrations |
 | `04_interfaces` | Routes, controllers, services, external API surface |
-| `05_documentation` | Index of existing markdown docs already in the repo |
-| `06_synthesis` | Cross-stage overview, architectural notes, current focus |
+| `05_ui` | Design-system tokens (color/typography/spacing) and shared component styling |
+| `06_documentation` | Index of existing markdown docs already in the repo |
+| `07_synthesis` | Cross-stage overview, architectural notes, current focus |
 
 ## Why this exists
 
