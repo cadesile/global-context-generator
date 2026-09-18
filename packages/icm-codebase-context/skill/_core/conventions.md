@@ -49,6 +49,11 @@ every stage's `output/` for every task.
   is the one record of the estimated token cost of loading everything vs.
   loading scoped-by-stage — an estimate (chars÷4 heuristic), not exact,
   updated whenever any stage's output changes (see `SKILL.md` step 5).
+  `shared/usage-savings-log.md` is a different fact with its own home: not
+  the structural cost of loading a stage, but a running record of tokens
+  actually saved across real tasks that consulted `.context/` instead of
+  exploring raw source — capped detail rows plus an ever-incrementing
+  running total, updated on its own Triggers-table row, not step 5.
 - **One-Way Cross-References.** If A points to B, B does not point back to A.
 - **Every output is an edit surface.** A human can hand-edit any file under
   `.context/stages/*/output/` directly. The next time you touch that stage,

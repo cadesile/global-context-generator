@@ -43,6 +43,7 @@ below.
 | You just changed top-level architecture (new service, moved a directory, changed the framework) | Update `.context/stages/02_architecture/output/*.md`, and `.context/shared/stack.md` if the stack itself changed |
 | User explicitly asks to (re)generate or refresh context | Re-run the relevant stage(s) in order, respecting each stage's Checkpoints — don't skip them because a prior run exists |
 | First time this skill is being installed into a repo | Run `setup/questionnaire.md` before stage `01_overview` |
+| You just finished an implementation task that used `.context/` stage output instead of exploring raw source for equivalent information | Append an entry to `.context/shared/usage-savings-log.md` — date, stage(s) consulted, one-line task summary, and estimated tokens saved (computed per that file's own instructions, reusing `token-savings.md`'s existing numbers) — incrementing its running total and trimming to the row cap if needed |
 
 ## How to use this skill
 
@@ -69,3 +70,8 @@ below.
      the "everything" total, and the savings percentage. Don't recompute
      rows for stages you didn't touch this pass unless their numbers are
      actually stale.
+
+   A third shared file, `.context/shared/usage-savings-log.md`, tracks a
+   different kind of event — not output being written, but output being
+   *used* to finish a real implementation task — and updates on the
+   separate Triggers-table row above, not as part of this step.
